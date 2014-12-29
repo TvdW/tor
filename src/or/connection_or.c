@@ -1466,37 +1466,36 @@ connection_tls_continue_handshake(or_connection_t *conn)
              tor_tls_err_to_string(result));
       return -1;
     case TOR_TLS_DONE:
-      if (! tor_tls_used_v1_handshake(conn->tls)) {
-        if (!tor_tls_is_server(conn->tls)) {
-          if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-            if (tor_tls_received_v3_certificate(conn->tls)) {
-              log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
-                       "handshake with ciphersuite %s",
-                       tor_tls_get_ciphersuite_name(conn->tls));
-              return connection_or_launch_v3_or_handshake(conn);
-            } else {
-              log_debug(LD_OR, "Done with initial SSL handshake (client-side)."
-                        " Requesting renegotiation.");
-              connection_or_change_state(conn,
-                  OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-              goto again;
-            }
+      if (!tor_tls_is_server(conn->tls)) {
+        if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
+          if (tor_tls_received_v3_certificate(conn->tls)) {
+            log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
+                     "handshake with ciphersuite %s",
+                     tor_tls_get_ciphersuite_name(conn->tls));
+            return connection_or_launch_v3_or_handshake(conn);
+          } else {
+            log_debug(LD_OR, "Done with initial SSL handshake (client-side)."
+                      " Requesting renegotiation.");
+            connection_or_change_state(conn,
+                OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
+            goto again;
           }
-          // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
-        } else {
-          /* v2/v3 handshake, but not a client. */
-          log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
-                           "Expecting renegotiation or VERSIONS cell");
-          tor_tls_set_renegotiate_callback(conn->tls,
-                                           connection_or_tls_renegotiated_cb,
-                                           conn);
-          connection_or_change_state(conn,
-              OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
-          connection_stop_writing(TO_CONN(conn));
-          connection_start_reading(TO_CONN(conn));
-          return 0;
         }
+        // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
+      } else {
+        /* v2/v3 handshake, but not a client. */
+        log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
+                         "Expecting renegotiation or VERSIONS cell");
+        tor_tls_set_renegotiate_callback(conn->tls,
+                                         connection_or_tls_renegotiated_cb,
+                                         conn);
+        connection_or_change_state(conn,
+            OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
+        connection_stop_writing(TO_CONN(conn));
+        connection_start_reading(TO_CONN(conn));
+        return 0;
       }
+
       return connection_tls_finish_handshake(conn);
     case TOR_TLS_WANTWRITE:
       connection_start_writing(TO_CONN(conn));
@@ -1529,54 +1528,53 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
       }
     }
 
-    if (! tor_tls_used_v1_handshake(conn->tls)) {
-      if (!tor_tls_is_server(conn->tls)) {
-        if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-          if (tor_tls_received_v3_certificate(conn->tls)) {
-            log_info(LD_OR, "Client got a v3 cert!");
-            if (connection_or_launch_v3_or_handshake(conn) < 0)
-              connection_or_close_for_error(conn, 0);
-            return;
-          } else {
-            connection_or_change_state(conn,
-                OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-            tor_tls_unblock_renegotiation(conn->tls);
-            if (bufferevent_ssl_renegotiate(conn->base_.bufev)<0) {
-              log_warn(LD_OR, "Start_renegotiating went badly.");
-              connection_or_close_for_error(conn, 0);
-            }
-            tor_tls_unblock_renegotiation(conn->tls);
-            return; /* ???? */
-          }
-        }
-      } else {
-        const int handshakes = tor_tls_get_num_server_handshakes(conn->tls);
-
-        if (handshakes == 1) {
-          /* v2 or v3 handshake, as a server. Only got one handshake, so
-           * wait for the next one. */
-          tor_tls_set_renegotiate_callback(conn->tls,
-                                           connection_or_tls_renegotiated_cb,
-                                           conn);
-          connection_or_change_state(conn,
-              OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
-        } else if (handshakes == 2) {
-          /* v2 handshake, as a server.  Two handshakes happened already,
-           * so we treat renegotiation as done.
-           */
-          connection_or_tls_renegotiated_cb(conn->tls, conn);
-        } else if (handshakes > 2) {
-          log_warn(LD_OR, "More than two handshakes done on connection. "
-                   "Closing.");
-          connection_or_close_for_error(conn, 0);
+    if (!tor_tls_is_server(conn->tls)) {
+      if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
+        if (tor_tls_received_v3_certificate(conn->tls)) {
+          log_info(LD_OR, "Client got a v3 cert!");
+          if (connection_or_launch_v3_or_handshake(conn) < 0)
+            connection_or_close_for_error(conn, 0);
+          return;
         } else {
-          log_warn(LD_BUG, "We were unexpectedly told that a connection "
-                   "got %d handshakes. Closing.", handshakes);
-          connection_or_close_for_error(conn, 0);
+          connection_or_change_state(conn,
+              OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
+          tor_tls_unblock_renegotiation(conn->tls);
+          if (bufferevent_ssl_renegotiate(conn->base_.bufev)<0) {
+            log_warn(LD_OR, "Start_renegotiating went badly.");
+            connection_or_close_for_error(conn, 0);
+          }
+          tor_tls_unblock_renegotiation(conn->tls);
+          return; /* ???? */
         }
-        return;
       }
+    } else {
+      const int handshakes = tor_tls_get_num_server_handshakes(conn->tls);
+
+      if (handshakes == 1) {
+        /* v2 or v3 handshake, as a server. Only got one handshake, so
+         * wait for the next one. */
+        tor_tls_set_renegotiate_callback(conn->tls,
+                                         connection_or_tls_renegotiated_cb,
+                                         conn);
+        connection_or_change_state(conn,
+            OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
+      } else if (handshakes == 2) {
+        /* v2 handshake, as a server.  Two handshakes happened already,
+         * so we treat renegotiation as done.
+         */
+        connection_or_tls_renegotiated_cb(conn->tls, conn);
+      } else if (handshakes > 2) {
+        log_warn(LD_OR, "More than two handshakes done on connection. "
+                 "Closing.");
+        connection_or_close_for_error(conn, 0);
+      } else {
+        log_warn(LD_BUG, "We were unexpectedly told that a connection "
+                 "got %d handshakes. Closing.", handshakes);
+        connection_or_close_for_error(conn, 0);
+      }
+      return;
     }
+
     connection_watch_events(TO_CONN(conn), READ_EVENT|WRITE_EVENT);
     if (connection_tls_finish_handshake(conn) < 0)
       connection_or_close_for_error(conn, 0); /* ???? */
@@ -1812,24 +1810,14 @@ connection_tls_finish_handshake(or_connection_t *conn)
 
   circuit_build_times_network_is_live(get_circuit_build_times_mutable());
 
-  if (tor_tls_used_v1_handshake(conn->tls)) {
-    conn->link_proto = 1;
-    if (!started_here) {
-      connection_or_init_conn_from_address(conn, &conn->base_.addr,
-                                           conn->base_.port, digest_rcvd, 0);
-    }
-    tor_tls_block_renegotiation(conn->tls);
-    return connection_or_set_state_open(conn);
-  } else {
-    connection_or_change_state(conn, OR_CONN_STATE_OR_HANDSHAKING_V2);
-    if (connection_init_or_handshake_state(conn, started_here) < 0)
-      return -1;
-    if (!started_here) {
-      connection_or_init_conn_from_address(conn, &conn->base_.addr,
-                                           conn->base_.port, digest_rcvd, 0);
-    }
-    return connection_or_send_versions(conn, 0);
+  connection_or_change_state(conn, OR_CONN_STATE_OR_HANDSHAKING_V2);
+  if (connection_init_or_handshake_state(conn, started_here) < 0)
+    return -1;
+  if (!started_here) {
+    connection_or_init_conn_from_address(conn, &conn->base_.addr,
+                                         conn->base_.port, digest_rcvd, 0);
   }
+  return connection_or_send_versions(conn, 0);
 }
 
 /**

@@ -569,19 +569,6 @@ tor_tls_free_all(void)
 #endif
 }
 
-/** We need to give OpenSSL a callback to verify certificates. This is
- * it: We always accept peer certs and complete the handshake.  We
- * don't validate them until later.
- */
-static int
-always_accept_verify_cb(int preverify_ok,
-                        X509_STORE_CTX *x509_ctx)
-{
-  (void) preverify_ok;
-  (void) x509_ctx;
-  return 1;
-}
-
 /** Return a newly allocated X509 name with commonName <b>cname</b>. */
 static X509_NAME *
 tor_x509_name_new(const char *cname)
@@ -1357,8 +1344,7 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
 #else
   (void)flags;
 #endif
-  SSL_CTX_set_verify(result->ctx, SSL_VERIFY_PEER,
-                     always_accept_verify_cb);
+  SSL_CTX_set_verify(result->ctx, SSL_VERIFY_NONE, NULL);
   /* let us realloc bufs that we're writing from */
   SSL_CTX_set_mode(result->ctx, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
 
@@ -1446,9 +1432,6 @@ tor_tls_server_info_callback(const SSL *ssl, int type, int val)
 
   /* Yes, we're casting away the const from ssl.  This is very naughty of us.
    * Let's hope openssl doesn't notice! */
-
-  /* Don't send a hello request. */
-  SSL_set_verify((SSL*) ssl, SSL_VERIFY_NONE, NULL);
 
   if (tls) {
     tls->wasV2Handshake = 1;
@@ -1910,7 +1893,6 @@ tor_tls_finish_handshake(tor_tls_t *tls)
   int r = TOR_TLS_DONE;
   if (tls->isServer) {
     SSL_set_info_callback(tls->ssl, NULL);
-    SSL_set_verify(tls->ssl, SSL_VERIFY_PEER, always_accept_verify_cb);
     /* This check is redundant, but back when we did it in the callback,
      * we might have not been able to look up the tor_tls_t if the code
      * was buggy.  Fixing that. */

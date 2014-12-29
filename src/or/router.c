@@ -2381,7 +2381,6 @@ router_dump_router_to_string(routerinfo_t *router,
                     "router %s %s %d 0 %d\n"
                     "%s"
                     "platform %s\n"
-                    "protocols Link 1 2 Circuit 1\n"
                     "published %s\n"
                     "fingerprint %s\n"
                     "uptime %ld\n"

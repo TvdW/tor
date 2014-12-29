@@ -159,7 +159,6 @@ test_dir_formats(void *arg)
           "platform Tor "VERSION" on ", sizeof(buf2));
   strlcat(buf2, get_uname(), sizeof(buf2));
   strlcat(buf2, "\n"
-          "protocols Link 1 2 Circuit 1\n"
           "published 1970-01-01 00:00:00\n"
           "fingerprint ", sizeof(buf2));
   tt_assert(!crypto_pk_get_fingerprint(pk2, fingerprint, 1));
@@ -204,7 +203,6 @@ test_dir_formats(void *arg)
           "platform Tor "VERSION" on ", sizeof(buf2));
   strlcat(buf2, get_uname(), sizeof(buf2));
   strlcat(buf2, "\n"
-          "protocols Link 1 2 Circuit 1\n"
           "published 1970-01-01 00:00:05\n"
           "fingerprint ", sizeof(buf2));
   tt_assert(!crypto_pk_get_fingerprint(pk1, fingerprint, 1));

@@ -44,14 +44,8 @@
 #include <event2/bufferevent_ssl.h>
 #endif
 
-static int connection_tls_finish_handshake(or_connection_t *conn);
 static int connection_or_launch_v3_or_handshake(or_connection_t *conn);
 static int connection_or_process_cells_from_inbuf(or_connection_t *conn);
-static int connection_or_check_valid_tls_handshake(or_connection_t *conn,
-                                                   int started_here,
-                                                   char *digest_rcvd_out);
-
-static void connection_or_tls_renegotiated_cb(tor_tls_t *tls, void *_conn);
 
 static unsigned int
 connection_or_is_bad_for_new_circs(or_connection_t *or_conn);
@@ -540,16 +534,8 @@ connection_or_process_inbuf(or_connection_t *conn)
       }
 
       return ret;
-    case OR_CONN_STATE_TLS_SERVER_RENEGOTIATING:
-#ifdef USE_BUFFEREVENTS
-      if (tor_tls_server_got_renegotiate(conn->tls))
-        connection_or_tls_renegotiated_cb(conn->tls, conn);
-      if (conn->base_.marked_for_close)
-        return 0;
-      /* fall through. */
-#endif
     case OR_CONN_STATE_OPEN:
-    case OR_CONN_STATE_OR_HANDSHAKING_V2:
+    case OR_CONN_STATE_OR_HANDSHAKING:
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       return connection_or_process_cells_from_inbuf(conn);
     default:
@@ -638,7 +624,7 @@ connection_or_finished_flushing(or_connection_t *conn)
   switch (conn->base_.state) {
     case OR_CONN_STATE_PROXY_HANDSHAKING:
     case OR_CONN_STATE_OPEN:
-    case OR_CONN_STATE_OR_HANDSHAKING_V2:
+    case OR_CONN_STATE_OR_HANDSHAKING:
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       break;
     default:
@@ -1410,37 +1396,7 @@ connection_tls_start_handshake,(or_connection_t *conn, int receiving))
   return 0;
 }
 
-/** Block all future attempts to renegotiate on 'conn' */
-void
-connection_or_block_renegotiation(or_connection_t *conn)
-{
-  tor_tls_t *tls = conn->tls;
-  if (!tls)
-    return;
-  tor_tls_set_renegotiate_callback(tls, NULL, NULL);
-  tor_tls_block_renegotiation(tls);
-}
-
-/** Invoked on the server side from inside tor_tls_read() when the server
- * gets a successful TLS renegotiation from the client. */
-static void
-connection_or_tls_renegotiated_cb(tor_tls_t *tls, void *_conn)
-{
-  or_connection_t *conn = _conn;
-  (void)tls;
-
-  /* Don't invoke this again. */
-  connection_or_block_renegotiation(conn);
-
-  if (connection_tls_finish_handshake(conn) < 0) {
-    /* XXXX_TLS double-check that it's ok to do this from inside read. */
-    /* XXXX_TLS double-check that this verifies certificates. */
-    connection_or_close_for_error(conn, 0);
-  }
-}
-
-/** Move forward with the tls handshake. If it finishes, hand
- * <b>conn</b> to connection_tls_finish_handshake().
+/** Move forward with the tls handshake.
  *
  * Return -1 if <b>conn</b> is broken, else return 0.
  */
@@ -1449,55 +1405,32 @@ connection_tls_continue_handshake(or_connection_t *conn)
 {
   int result;
   check_no_tls_errors();
- again:
-  if (conn->base_.state == OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING) {
-    // log_notice(LD_OR, "Renegotiate with %p", conn->tls);
-    result = tor_tls_renegotiate(conn->tls);
-    // log_notice(LD_OR, "Result: %d", result);
-  } else {
-    tor_assert(conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING);
-    // log_notice(LD_OR, "Continue handshake with %p", conn->tls);
-    result = tor_tls_handshake(conn->tls);
-    // log_notice(LD_OR, "Result: %d", result);
-  }
+  tor_assert(conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING);
+  // log_notice(LD_OR, "Continue handshake with %p", conn->tls);
+  result = tor_tls_handshake(conn->tls);
+  // log_notice(LD_OR, "Result: %d", result);
   switch (result) {
     CASE_TOR_TLS_ERROR_ANY:
     log_info(LD_OR,"tls error [%s]. breaking connection.",
              tor_tls_err_to_string(result));
       return -1;
     case TOR_TLS_DONE:
-      if (! tor_tls_used_v1_handshake(conn->tls)) {
-        if (!tor_tls_is_server(conn->tls)) {
-          if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-            if (tor_tls_received_v3_certificate(conn->tls)) {
-              log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
-                       "handshake with ciphersuite %s",
-                       tor_tls_get_ciphersuite_name(conn->tls));
-              return connection_or_launch_v3_or_handshake(conn);
-            } else {
-              log_debug(LD_OR, "Done with initial SSL handshake (client-side)."
-                        " Requesting renegotiation.");
-              connection_or_change_state(conn,
-                  OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-              goto again;
-            }
-          }
-          // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
-        } else {
-          /* v2/v3 handshake, but not a client. */
-          log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
-                           "Expecting renegotiation or VERSIONS cell");
-          tor_tls_set_renegotiate_callback(conn->tls,
-                                           connection_or_tls_renegotiated_cb,
-                                           conn);
-          connection_or_change_state(conn,
-              OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
-          connection_stop_writing(TO_CONN(conn));
-          connection_start_reading(TO_CONN(conn));
-          return 0;
-        }
+      if (!tor_tls_is_server(conn->tls)) {
+        log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
+                 "handshake with ciphersuite %s",
+                 tor_tls_get_ciphersuite_name(conn->tls));
+        return connection_or_launch_v3_or_handshake(conn);
+        // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
+      } else {
+        /* v3 handshake, but not a client. */
+        log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
+                         "Expecting VERSIONS cell");
+        connection_or_change_state(conn,
+            OR_CONN_STATE_OR_HANDSHAKING);
+        connection_stop_writing(TO_CONN(conn));
+        connection_start_reading(TO_CONN(conn));
+        return 0;
       }
-      return connection_tls_finish_handshake(conn);
     case TOR_TLS_WANTWRITE:
       connection_start_writing(TO_CONN(conn));
       log_debug(LD_OR,"wanted write");
@@ -1529,54 +1462,19 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
       }
     }
 
-    if (! tor_tls_used_v1_handshake(conn->tls)) {
-      if (!tor_tls_is_server(conn->tls)) {
-        if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-          if (tor_tls_received_v3_certificate(conn->tls)) {
-            log_info(LD_OR, "Client got a v3 cert!");
-            if (connection_or_launch_v3_or_handshake(conn) < 0)
-              connection_or_close_for_error(conn, 0);
-            return;
-          } else {
-            connection_or_change_state(conn,
-                OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-            tor_tls_unblock_renegotiation(conn->tls);
-            if (bufferevent_ssl_renegotiate(conn->base_.bufev)<0) {
-              log_warn(LD_OR, "Start_renegotiating went badly.");
-              connection_or_close_for_error(conn, 0);
-            }
-            tor_tls_unblock_renegotiation(conn->tls);
-            return; /* ???? */
-          }
-        }
-      } else {
-        const int handshakes = tor_tls_get_num_server_handshakes(conn->tls);
-
-        if (handshakes == 1) {
-          /* v2 or v3 handshake, as a server. Only got one handshake, so
-           * wait for the next one. */
-          tor_tls_set_renegotiate_callback(conn->tls,
-                                           connection_or_tls_renegotiated_cb,
-                                           conn);
-          connection_or_change_state(conn,
-              OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
-        } else if (handshakes == 2) {
-          /* v2 handshake, as a server.  Two handshakes happened already,
-           * so we treat renegotiation as done.
-           */
-          connection_or_tls_renegotiated_cb(conn->tls, conn);
-        } else if (handshakes > 2) {
-          log_warn(LD_OR, "More than two handshakes done on connection. "
-                   "Closing.");
+    if (!tor_tls_is_server(conn->tls)) {
+      if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
+        log_info(LD_OR, "Client got a v3 cert!");
+        if (connection_or_launch_v3_or_handshake(conn) < 0)
           connection_or_close_for_error(conn, 0);
-        } else {
-          log_warn(LD_BUG, "We were unexpectedly told that a connection "
-                   "got %d handshakes. Closing.", handshakes);
-          connection_or_close_for_error(conn, 0);
-        }
         return;
       }
+    } else {
+      /* v3 handshake, as a server */
+      connection_or_change_state(conn, OR_CONN_STATE_OR_HANDSHAKING);
+      return;
     }
+
     connection_watch_events(TO_CONN(conn), READ_EVENT|WRITE_EVENT);
     if (connection_tls_finish_handshake(conn) < 0)
       connection_or_close_for_error(conn, 0); /* ???? */
@@ -1610,95 +1508,7 @@ connection_or_nonopen_was_started_here(or_connection_t *conn)
   return !tor_tls_is_server(conn->tls);
 }
 
-/** <b>Conn</b> just completed its handshake. Return 0 if all is well, and
- * return -1 if he is lying, broken, or otherwise something is wrong.
- *
- * If we initiated this connection (<b>started_here</b> is true), make sure
- * the other side sent a correctly formed certificate. If I initiated the
- * connection, make sure it's the right guy.
- *
- * Otherwise (if we _didn't_ initiate this connection), it's okay for
- * the certificate to be weird or absent.
- *
- * If we return 0, and the certificate is as expected, write a hash of the
- * identity key into <b>digest_rcvd_out</b>, which must have DIGEST_LEN
- * space in it.
- * If the certificate is invalid or missing on an incoming connection,
- * we return 0 and set <b>digest_rcvd_out</b> to DIGEST_LEN NUL bytes.
- * (If we return -1, the contents of this buffer are undefined.)
- *
- * As side effects,
- * 1) Set conn->circ_id_type according to tor-spec.txt.
- * 2) If we're an authdirserver and we initiated the connection: drop all
- *    descriptors that claim to be on that IP/port but that aren't
- *    this guy; and note that this guy is reachable.
- * 3) If this is a bridge and we didn't configure its identity
- *    fingerprint, remember the keyid we just learned.
- */
-static int
-connection_or_check_valid_tls_handshake(or_connection_t *conn,
-                                        int started_here,
-                                        char *digest_rcvd_out)
-{
-  crypto_pk_t *identity_rcvd=NULL;
-  const or_options_t *options = get_options();
-  int severity = server_mode(options) ? LOG_PROTOCOL_WARN : LOG_WARN;
-  const char *safe_address =
-    started_here ? conn->base_.address :
-                   safe_str_client(conn->base_.address);
-  const char *conn_type = started_here ? "outgoing" : "incoming";
-  int has_cert = 0;
-
-  check_no_tls_errors();
-  has_cert = tor_tls_peer_has_cert(conn->tls);
-  if (started_here && !has_cert) {
-    log_info(LD_HANDSHAKE,"Tried connecting to router at %s:%d, but it didn't "
-             "send a cert! Closing.",
-             safe_address, conn->base_.port);
-    return -1;
-  } else if (!has_cert) {
-    log_debug(LD_HANDSHAKE,"Got incoming connection with no certificate. "
-              "That's ok.");
-  }
-  check_no_tls_errors();
-
-  if (has_cert) {
-    int v = tor_tls_verify(started_here?severity:LOG_INFO,
-                           conn->tls, &identity_rcvd);
-    if (started_here && v<0) {
-      log_fn(severity,LD_HANDSHAKE,"Tried connecting to router at %s:%d: It"
-             " has a cert but it's invalid. Closing.",
-             safe_address, conn->base_.port);
-        return -1;
-    } else if (v<0) {
-      log_info(LD_HANDSHAKE,"Incoming connection gave us an invalid cert "
-               "chain; ignoring.");
-    } else {
-      log_debug(LD_HANDSHAKE,
-                "The certificate seems to be valid on %s connection "
-                "with %s:%d", conn_type, safe_address, conn->base_.port);
-    }
-    check_no_tls_errors();
-  }
-
-  if (identity_rcvd) {
-    crypto_pk_get_digest(identity_rcvd, digest_rcvd_out);
-  } else {
-    memset(digest_rcvd_out, 0, DIGEST_LEN);
-  }
-
-  tor_assert(conn->chan);
-  channel_set_circid_type(TLS_CHAN_TO_BASE(conn->chan), identity_rcvd, 1);
-
-  crypto_pk_free(identity_rcvd);
-
-  if (started_here)
-    return connection_or_client_learned_peer_id(conn,
-                                     (const uint8_t*)digest_rcvd_out);
-
-  return 0;
-}
-
+// XXX TvdW comment
 /** Called when we (as a connection initiator) have definitively,
  * authenticatedly, learned that ID of the Tor instance on the other
  * side of <b>conn</b> is <b>peer_id</b>.  For v1 and v2 handshakes,
@@ -1780,59 +1590,6 @@ connection_or_client_used(or_connection_t *conn)
   } else return 0;
 }
 
-/** The v1/v2 TLS handshake is finished.
- *
- * Make sure we are happy with the person we just handshaked with.
- *
- * If he initiated the connection, make sure he's not already connected,
- * then initialize conn from the information in router.
- *
- * If all is successful, call circuit_n_conn_done() to handle events
- * that have been pending on the <tls handshake completion. Also set the
- * directory to be dirty (only matters if I'm an authdirserver).
- *
- * If this is a v2 TLS handshake, send a versions cell.
- */
-static int
-connection_tls_finish_handshake(or_connection_t *conn)
-{
-  char digest_rcvd[DIGEST_LEN];
-  int started_here = connection_or_nonopen_was_started_here(conn);
-
-  log_debug(LD_HANDSHAKE,"%s tls handshake on %p with %s done, using "
-            "ciphersuite %s. verifying.",
-            started_here?"outgoing":"incoming",
-            conn,
-            safe_str_client(conn->base_.address),
-            tor_tls_get_ciphersuite_name(conn->tls));
-
-  if (connection_or_check_valid_tls_handshake(conn, started_here,
-                                              digest_rcvd) < 0)
-    return -1;
-
-  circuit_build_times_network_is_live(get_circuit_build_times_mutable());
-
-  if (tor_tls_used_v1_handshake(conn->tls)) {
-    conn->link_proto = 1;
-    if (!started_here) {
-      connection_or_init_conn_from_address(conn, &conn->base_.addr,
-                                           conn->base_.port, digest_rcvd, 0);
-    }
-    tor_tls_block_renegotiation(conn->tls);
-    rep_hist_note_negotiated_link_proto(1, started_here);
-    return connection_or_set_state_open(conn);
-  } else {
-    connection_or_change_state(conn, OR_CONN_STATE_OR_HANDSHAKING_V2);
-    if (connection_init_or_handshake_state(conn, started_here) < 0)
-      return -1;
-    if (!started_here) {
-      connection_or_init_conn_from_address(conn, &conn->base_.addr,
-                                           conn->base_.port, digest_rcvd, 0);
-    }
-    return connection_or_send_versions(conn, 0);
-  }
-}
-
 /**
  * Called as client when initial TLS handshake is done, and we notice
  * that we got a v3-handshake signalling certificate from the server.
@@ -1843,7 +1600,6 @@ static int
 connection_or_launch_v3_or_handshake(or_connection_t *conn)
 {
   tor_assert(connection_or_nonopen_was_started_here(conn));
-  tor_assert(tor_tls_received_v3_certificate(conn->tls));
 
   circuit_build_times_network_is_live(get_circuit_build_times_mutable());
 

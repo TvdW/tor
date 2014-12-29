@@ -66,9 +66,6 @@ int tor_tls_context_init(unsigned flags,
                          unsigned int key_lifetime);
 tor_tls_t *tor_tls_new(int sock, int is_server);
 void tor_tls_set_logged_address(tor_tls_t *tls, const char *address);
-void tor_tls_set_renegotiate_callback(tor_tls_t *tls,
-                                      void (*cb)(tor_tls_t *, void *arg),
-                                      void *arg);
 int tor_tls_is_server(tor_tls_t *tls);
 void tor_tls_free(tor_tls_t *tls);
 int tor_tls_peer_has_cert(tor_tls_t *tls);
@@ -81,10 +78,6 @@ int tor_tls_read(tor_tls_t *tls, char *cp, size_t len);
 int tor_tls_write(tor_tls_t *tls, const char *cp, size_t n);
 int tor_tls_handshake(tor_tls_t *tls);
 int tor_tls_finish_handshake(tor_tls_t *tls);
-int tor_tls_renegotiate(tor_tls_t *tls);
-void tor_tls_unblock_renegotiation(tor_tls_t *tls);
-void tor_tls_block_renegotiation(tor_tls_t *tls);
-void tor_tls_assert_renegotiation_unblocked(tor_tls_t *tls);
 int tor_tls_shutdown(tor_tls_t *tls);
 int tor_tls_get_pending_bytes(tor_tls_t *tls);
 size_t tor_tls_get_forced_write_size(tor_tls_t *tls);
@@ -98,10 +91,6 @@ void tor_tls_get_buffer_sizes(tor_tls_t *tls,
 
 MOCK_DECL(double, tls_get_write_overhead_ratio, (void));
 
-int tor_tls_used_v1_handshake(tor_tls_t *tls);
-int tor_tls_received_v3_certificate(tor_tls_t *tls);
-int tor_tls_get_num_server_handshakes(tor_tls_t *tls);
-int tor_tls_server_got_renegotiate(tor_tls_t *tls);
 int tor_tls_get_tlssecrets(tor_tls_t *tls, uint8_t *secrets_out);
 
 /* Log and abort if there are unhandled TLS errors in OpenSSL's error stack.
@@ -113,7 +102,6 @@ void tor_tls_log_one_error(tor_tls_t *tls, unsigned long err,
                            int severity, int domain, const char *doing);
 
 #ifdef USE_BUFFEREVENTS
-int tor_tls_start_renegotiating(tor_tls_t *tls);
 struct bufferevent *tor_tls_init_bufferevent(tor_tls_t *tls,
                                      struct bufferevent *bufev_in,
                                       evutil_socket_t socket, int receiving,

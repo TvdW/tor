@@ -91,8 +91,6 @@ void tor_tls_get_buffer_sizes(tor_tls_t *tls,
 
 MOCK_DECL(double, tls_get_write_overhead_ratio, (void));
 
-int tor_tls_get_num_server_handshakes(tor_tls_t *tls);
-int tor_tls_server_got_renegotiate(tor_tls_t *tls);
 int tor_tls_get_tlssecrets(tor_tls_t *tls, uint8_t *secrets_out);
 
 /* Log and abort if there are unhandled TLS errors in OpenSSL's error stack.

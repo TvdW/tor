@@ -1544,7 +1544,6 @@ tor_tls_free(tor_tls_t *tls)
 #endif
   SSL_free(tls->ssl);
   tls->ssl = NULL;
-  tls->negotiated_callback = NULL;
   if (tls->context)
     tor_tls_context_decref(tls->context);
   tor_free(tls->address);

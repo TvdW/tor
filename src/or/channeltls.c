@@ -1181,9 +1181,6 @@ channel_tls_handle_var_cell(var_cell_t *var_cell, or_connection_t *conn)
        * notice "hey, data arrived!" before we notice "hey, the handshake
        * finished!" And we need to be accepting both at once to handle both
        * the v2 and v3 handshakes. */
-
-      /* fall through */
-    case OR_CONN_STATE_TLS_SERVER_RENEGOTIATING:
       if (!(command_allowed_before_handshake(var_cell->command))) {
         log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
                "Received a cell with command %d in unexpected "
@@ -1348,9 +1345,7 @@ enter_v3_handshake_with_cell(var_cell_t *cell, channel_tls_t *chan)
 
   started_here = connection_or_nonopen_was_started_here(chan->conn);
 
-  tor_assert(TO_CONN(chan->conn)->state == OR_CONN_STATE_TLS_HANDSHAKING ||
-             TO_CONN(chan->conn)->state ==
-               OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
+  tor_assert(TO_CONN(chan->conn)->state == OR_CONN_STATE_TLS_HANDSHAKING);
 
   if (started_here) {
     log_fn(LOG_PROTOCOL_WARN, LD_OR,
@@ -1412,7 +1407,6 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       break;
     case OR_CONN_STATE_TLS_HANDSHAKING:
-    case OR_CONN_STATE_TLS_SERVER_RENEGOTIATING:
     default:
       log_fn(LOG_PROTOCOL_WARN, LD_OR,
              "VERSIONS cell while in unexpected state");

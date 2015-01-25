@@ -1578,16 +1578,6 @@ tor_tls_set_logged_address(tor_tls_t *tls, const char *address)
   tls->address = tor_strdup(address);
 }
 
-/** If this version of openssl supports it, turn off renegotiation on
- * <b>tls</b>.  (Our protocol never requires this for security, but it's nice
- * to use belt-and-suspenders here.)
- */
-void
-tor_tls_block_renegotiation(tor_tls_t *tls)
-{
-    //XXX Tvdw
-}
-
 /** Return whether this tls initiated the connect (client) or
  * received it (server). */
 int
@@ -1790,35 +1780,6 @@ tor_tls_start_renegotiating(tor_tls_t *tls)
   return 0;
 }
 #endif
-
-/** Client only: Renegotiate a TLS session.  When finished, returns
- * TOR_TLS_DONE.  On failure, returns TOR_TLS_ERROR, TOR_TLS_WANTREAD, or
- * TOR_TLS_WANTWRITE.
- */
-int
-tor_tls_renegotiate(tor_tls_t *tls)
-{
-  int r;
-  tor_assert(tls);
-  /* We could do server-initiated renegotiation too, but that would be tricky.
-   * Instead of "SSL_renegotiate, then SSL_do_handshake until done" */
-  tor_assert(!tls->isServer);
-  if (tls->state != TOR_TLS_ST_RENEGOTIATE) {
-    int r = SSL_renegotiate(tls->ssl);
-    if (r <= 0) {
-      return tor_tls_get_error(tls, r, 0, "renegotiating", LOG_WARN,
-                               LD_HANDSHAKE);
-    }
-    tls->state = TOR_TLS_ST_RENEGOTIATE;
-  }
-  r = SSL_do_handshake(tls->ssl);
-  if (r == 1) {
-    tls->state = TOR_TLS_ST_OPEN;
-    return TOR_TLS_DONE;
-  } else
-    return tor_tls_get_error(tls, r, 0, "renegotiating handshake", LOG_INFO,
-                             LD_HANDSHAKE);
-}
 
 /** Shut down an open tls connection <b>tls</b>.  When finished, returns
  * TOR_TLS_DONE.  On failure, returns TOR_TLS_ERROR, TOR_TLS_WANTREAD,

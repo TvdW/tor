@@ -1468,18 +1468,10 @@ connection_tls_continue_handshake(or_connection_t *conn)
     case TOR_TLS_DONE:
       if (!tor_tls_is_server(conn->tls)) {
         if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-          if (tor_tls_received_v3_certificate(conn->tls)) {
-            log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
-                     "handshake with ciphersuite %s",
-                     tor_tls_get_ciphersuite_name(conn->tls));
-            return connection_or_launch_v3_or_handshake(conn);
-          } else {
-            log_debug(LD_OR, "Done with initial SSL handshake (client-side)."
-                      " Requesting renegotiation.");
-            connection_or_change_state(conn,
-                OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-            goto again;
-          }
+          log_info(LD_OR, "Client got a v3 cert!  Moving on to v3 "
+                   "handshake with ciphersuite %s",
+                   tor_tls_get_ciphersuite_name(conn->tls));
+          return connection_or_launch_v3_or_handshake(conn);
         }
         // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
       } else {
@@ -1530,22 +1522,10 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
 
     if (!tor_tls_is_server(conn->tls)) {
       if (conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING) {
-        if (tor_tls_received_v3_certificate(conn->tls)) {
-          log_info(LD_OR, "Client got a v3 cert!");
-          if (connection_or_launch_v3_or_handshake(conn) < 0)
-            connection_or_close_for_error(conn, 0);
-          return;
-        } else {
-          connection_or_change_state(conn,
-              OR_CONN_STATE_TLS_CLIENT_RENEGOTIATING);
-          tor_tls_unblock_renegotiation(conn->tls);
-          if (bufferevent_ssl_renegotiate(conn->base_.bufev)<0) {
-            log_warn(LD_OR, "Start_renegotiating went badly.");
-            connection_or_close_for_error(conn, 0);
-          }
-          tor_tls_unblock_renegotiation(conn->tls);
-          return; /* ???? */
-        }
+        log_info(LD_OR, "Client got a v3 cert!");
+        if (connection_or_launch_v3_or_handshake(conn) < 0)
+          connection_or_close_for_error(conn, 0);
+        return;
       }
     } else {
       const int handshakes = tor_tls_get_num_server_handshakes(conn->tls);
@@ -1830,7 +1810,6 @@ static int
 connection_or_launch_v3_or_handshake(or_connection_t *conn)
 {
   tor_assert(connection_or_nonopen_was_started_here(conn));
-  tor_assert(tor_tls_received_v3_certificate(conn->tls));
 
   circuit_build_times_network_is_live(get_circuit_build_times_mutable());
 

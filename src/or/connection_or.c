@@ -51,8 +51,6 @@ static int connection_or_check_valid_tls_handshake(or_connection_t *conn,
                                                    int started_here,
                                                    char *digest_rcvd_out);
 
-static void connection_or_tls_renegotiated_cb(tor_tls_t *tls, void *_conn);
-
 static unsigned int
 connection_or_is_bad_for_new_circs(or_connection_t *or_conn);
 static void connection_or_mark_bad_for_new_circs(or_connection_t *or_conn);
@@ -542,8 +540,6 @@ connection_or_process_inbuf(or_connection_t *conn)
       return ret;
     case OR_CONN_STATE_TLS_SERVER_RENEGOTIATING:
 #ifdef USE_BUFFEREVENTS
-      if (tor_tls_server_got_renegotiate(conn->tls))
-        connection_or_tls_renegotiated_cb(conn->tls, conn);
       if (conn->base_.marked_for_close)
         return 0;
       /* fall through. */
@@ -1410,35 +1406,6 @@ connection_tls_start_handshake,(or_connection_t *conn, int receiving))
   return 0;
 }
 
-/** Block all future attempts to renegotiate on 'conn' */
-void
-connection_or_block_renegotiation(or_connection_t *conn)
-{
-  tor_tls_t *tls = conn->tls;
-  if (!tls)
-    return;
-  tor_tls_set_renegotiate_callback(tls, NULL, NULL);
-  tor_tls_block_renegotiation(tls);
-}
-
-/** Invoked on the server side from inside tor_tls_read() when the server
- * gets a successful TLS renegotiation from the client. */
-static void
-connection_or_tls_renegotiated_cb(tor_tls_t *tls, void *_conn)
-{
-  or_connection_t *conn = _conn;
-  (void)tls;
-
-  /* Don't invoke this again. */
-  connection_or_block_renegotiation(conn);
-
-  if (connection_tls_finish_handshake(conn) < 0) {
-    /* XXXX_TLS double-check that it's ok to do this from inside read. */
-    /* XXXX_TLS double-check that this verifies certificates. */
-    connection_or_close_for_error(conn, 0);
-  }
-}
-
 /** Move forward with the tls handshake. If it finishes, hand
  * <b>conn</b> to connection_tls_finish_handshake().
  *
@@ -1478,9 +1445,6 @@ connection_tls_continue_handshake(or_connection_t *conn)
         /* v2/v3 handshake, but not a client. */
         log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
                          "Expecting renegotiation or VERSIONS cell");
-        tor_tls_set_renegotiate_callback(conn->tls,
-                                         connection_or_tls_renegotiated_cb,
-                                         conn);
         connection_or_change_state(conn,
             OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
         connection_stop_writing(TO_CONN(conn));
@@ -1533,16 +1497,13 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
       if (handshakes == 1) {
         /* v2 or v3 handshake, as a server. Only got one handshake, so
          * wait for the next one. */
-        tor_tls_set_renegotiate_callback(conn->tls,
-                                         connection_or_tls_renegotiated_cb,
-                                         conn);
+        // XXX TvdW TODO
         connection_or_change_state(conn,
             OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
       } else if (handshakes == 2) {
         /* v2 handshake, as a server.  Two handshakes happened already,
          * so we treat renegotiation as done.
          */
-        connection_or_tls_renegotiated_cb(conn->tls, conn);
       } else if (handshakes > 2) {
         log_warn(LD_OR, "More than two handshakes done on connection. "
                  "Closing.");

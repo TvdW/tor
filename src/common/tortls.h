@@ -66,9 +66,6 @@ int tor_tls_context_init(unsigned flags,
                          unsigned int key_lifetime);
 tor_tls_t *tor_tls_new(int sock, int is_server);
 void tor_tls_set_logged_address(tor_tls_t *tls, const char *address);
-void tor_tls_set_renegotiate_callback(tor_tls_t *tls,
-                                      void (*cb)(tor_tls_t *, void *arg),
-                                      void *arg);
 int tor_tls_is_server(tor_tls_t *tls);
 void tor_tls_free(tor_tls_t *tls);
 int tor_tls_peer_has_cert(tor_tls_t *tls);

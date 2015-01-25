@@ -1660,27 +1660,6 @@ tor_tls_set_logged_address(tor_tls_t *tls, const char *address)
   tls->address = tor_strdup(address);
 }
 
-/** Set <b>cb</b> to be called with argument <b>arg</b> whenever <b>tls</b>
- * next gets a client-side renegotiate in the middle of a read.  Do not
- * invoke this function until <em>after</em> initial handshaking is done!
- */
-void
-tor_tls_set_renegotiate_callback(tor_tls_t *tls,
-                                 void (*cb)(tor_tls_t *, void *arg),
-                                 void *arg)
-{
-  tls->negotiated_callback = cb;
-  tls->callback_arg = arg;
-  tls->got_renegotiate = 0;
-#ifdef V2_HANDSHAKE_SERVER
-  if (cb) {
-    SSL_set_info_callback(tls->ssl, tor_tls_server_info_callback);
-  } else {
-    SSL_set_info_callback(tls->ssl, tor_tls_debug_state_callback);
-  }
-#endif
-}
-
 /** If this version of openssl supports it, turn off renegotiation on
  * <b>tls</b>.  (Our protocol never requires this for security, but it's nice
  * to use belt-and-suspenders here.)

@@ -145,11 +145,6 @@ struct tor_tls_t {
                                        * depending on which operations
                                        * have completed successfully. */
   unsigned int isServer:1; /**< True iff this is a server-side connection */
-  unsigned int wasV2Handshake:1; /**< True iff the original handshake for
-                                  * this connection used the updated version
-                                  * of the connection protocol (client sends
-                                  * different cipher list, server sends only
-                                  * one certificate). */
   size_t wantwrite_n; /**< 0 normally, >0 if we returned wantwrite last
                        * time. */
   /** Last values retrieved from BIO_number_read()/write(); see
@@ -1184,10 +1179,6 @@ tor_tls_context_new(crypto_pk_t *identity, unsigned int key_lifetime,
   SSL_CTX_set_options(result->ctx, SSL_OP_SINGLE_DH_USE);
   SSL_CTX_set_options(result->ctx, SSL_OP_SINGLE_ECDH_USE);
 
-#ifdef SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION
-  SSL_CTX_set_options(result->ctx,
-                      SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
-#endif
 #ifndef OPENSSL_NO_COMP
   /* Don't actually allow compression; it uses ram and time, but the data
    * we transmit is all encrypted anyway. */
@@ -1659,15 +1650,9 @@ tor_tls_finish_handshake(tor_tls_t *tls)
     /* This check is redundant, but back when we did it in the callback,
      * we might have not been able to look up the tor_tls_t if the code
      * was buggy.  Fixing that. */
-    if (!tls->wasV2Handshake) {
-      log_warn(LD_BUG, "For some reason, wasV2Handshake didn't"
-               " get set. Fixing that.");
-    }
-    tls->wasV2Handshake = 1;
     log_debug(LD_HANDSHAKE, "Completed V2 TLS handshake with client; waiting"
               " for renegotiation.");
   } else {
-    tls->wasV2Handshake = 1;
     if (SSL_set_cipher_list(tls->ssl, SERVER_CIPHER_LIST) == 0) {
       tls_log_errors(NULL, LOG_WARN, LD_HANDSHAKE, "re-setting ciphers");
       r = TOR_TLS_ERROR_MISC;

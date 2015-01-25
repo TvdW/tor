@@ -1410,7 +1410,6 @@ connection_tls_continue_handshake(or_connection_t *conn)
 {
   int result;
   check_no_tls_errors();
- again:
   tor_assert(conn->base_.state == OR_CONN_STATE_TLS_HANDSHAKING);
   // log_notice(LD_OR, "Continue handshake with %p", conn->tls);
   result = tor_tls_handshake(conn->tls);

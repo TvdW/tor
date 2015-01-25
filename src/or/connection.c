@@ -158,8 +158,6 @@ conn_state_to_string(int type, int state)
         case OR_CONN_STATE_CONNECTING: return "connect()ing";
         case OR_CONN_STATE_PROXY_HANDSHAKING: return "handshaking (proxy)";
         case OR_CONN_STATE_TLS_HANDSHAKING: return "handshaking (TLS)";
-        case OR_CONN_STATE_TLS_SERVER_RENEGOTIATING:
-          return "waiting for renegotiation or V3 handshake";
         case OR_CONN_STATE_OR_HANDSHAKING_V2:
           return "handshaking (Tor, v2 handshake)";
         case OR_CONN_STATE_OR_HANDSHAKING_V3:
@@ -3836,8 +3834,6 @@ connection_handle_write_impl(connection_t *conn, int force)
         return -1;
       }
       return 0;
-    } else if (conn->state == OR_CONN_STATE_TLS_SERVER_RENEGOTIATING) {
-      return connection_handle_read(conn);
     }
 
     /* else open, or closing */

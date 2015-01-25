@@ -128,8 +128,7 @@ typedef struct tor_tls_context_t {
 
 typedef enum {
     TOR_TLS_ST_HANDSHAKE, TOR_TLS_ST_OPEN, TOR_TLS_ST_GOTCLOSE,
-    TOR_TLS_ST_SENTCLOSE, TOR_TLS_ST_CLOSED, TOR_TLS_ST_RENEGOTIATE,
-    TOR_TLS_ST_BUFFEREVENT
+    TOR_TLS_ST_SENTCLOSE, TOR_TLS_ST_CLOSED, TOR_TLS_ST_BUFFEREVENT
 } tor_tls_state_t;
 #define tor_tls_state_bitfield_t ENUM_BF(tor_tls_state_t)
 

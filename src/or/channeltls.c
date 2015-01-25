@@ -1156,26 +1156,6 @@ channel_tls_handle_var_cell(var_cell_t *var_cell, or_connection_t *conn)
     return;
 
   switch (TO_CONN(conn)->state) {
-    case OR_CONN_STATE_OR_HANDSHAKING_V2:
-      if (var_cell->command != CELL_VERSIONS) {
-        log_fn(LOG_PROTOCOL_WARN, LD_PROTOCOL,
-               "Received a cell with command %d in unexpected "
-               "orconn state \"%s\" [%d], channel state \"%s\" [%d]; "
-               "closing the connection.",
-               (int)(var_cell->command),
-               conn_state_to_string(CONN_TYPE_OR, TO_CONN(conn)->state),
-               TO_CONN(conn)->state,
-               channel_state_to_string(TLS_CHAN_TO_BASE(chan)->state),
-               (int)(TLS_CHAN_TO_BASE(chan)->state));
-        /*
-         * The code in connection_or.c will tell channel_t to close for
-         * error; it will go to CHANNEL_STATE_CLOSING, and then to
-         * CHANNEL_STATE_ERROR when conn is closed.
-         */
-        connection_or_close_for_error(conn, 0);
-        return;
-      }
-      break;
     case OR_CONN_STATE_TLS_HANDSHAKING:
       /* If we're using bufferevents, it's entirely possible for us to
        * notice "hey, data arrived!" before we notice "hey, the handshake
@@ -1403,7 +1383,6 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
   }
   switch (chan->conn->base_.state)
     {
-    case OR_CONN_STATE_OR_HANDSHAKING_V2:
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       break;
     case OR_CONN_STATE_TLS_HANDSHAKING:
@@ -1443,15 +1422,6 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
     log_fn(LOG_PROTOCOL_WARN, LD_OR,
            "Negotiated link protocol 2 or lower after doing a v3 TLS "
            "handshake. Closing connection.");
-    connection_or_close_for_error(chan->conn, 0);
-    return;
-  } else if (highest_supported_version != 2 &&
-             chan->conn->base_.state == OR_CONN_STATE_OR_HANDSHAKING_V2) {
-    /* XXXX This should eventually be a log_protocol_warn */
-    log_fn(LOG_WARN, LD_OR,
-           "Negotiated link with non-2 protocol after doing a v2 TLS "
-           "handshake with %s. Closing connection.",
-           fmt_addr(&chan->conn->base_.addr));
     connection_or_close_for_error(chan->conn, 0);
     return;
   }
@@ -1570,8 +1540,7 @@ channel_tls_process_netinfo_cell(cell_t *cell, channel_tls_t *chan)
            chan->conn->link_proto == 0 ? "non-versioned" : "a v1");
     return;
   }
-  if (chan->conn->base_.state != OR_CONN_STATE_OR_HANDSHAKING_V2 &&
-      chan->conn->base_.state != OR_CONN_STATE_OR_HANDSHAKING_V3) {
+  if (chan->conn->base_.state != OR_CONN_STATE_OR_HANDSHAKING_V3) {
     log_fn(LOG_PROTOCOL_WARN, LD_OR,
            "Received a NETINFO cell on non-handshaking connection; dropping.");
     return;

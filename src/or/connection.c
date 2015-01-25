@@ -158,8 +158,6 @@ conn_state_to_string(int type, int state)
         case OR_CONN_STATE_CONNECTING: return "connect()ing";
         case OR_CONN_STATE_PROXY_HANDSHAKING: return "handshaking (proxy)";
         case OR_CONN_STATE_TLS_HANDSHAKING: return "handshaking (TLS)";
-        case OR_CONN_STATE_OR_HANDSHAKING_V2:
-          return "handshaking (Tor, v2 handshake)";
         case OR_CONN_STATE_OR_HANDSHAKING_V3:
           return "handshaking (Tor, v3 handshake)";
         case OR_CONN_STATE_OPEN: return "open";

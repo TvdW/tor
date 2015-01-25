@@ -251,7 +251,6 @@ tor_tls_get_state_description(tor_tls_t *tls, char *buf, size_t sz)
     CASE(GOTCLOSE);
     CASE(SENTCLOSE);
     CASE(CLOSED);
-    CASE(RENEGOTIATE);
 #undef CASE
   case TOR_TLS_ST_BUFFEREVENT:
     tortls_state = "";

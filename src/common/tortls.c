@@ -171,8 +171,6 @@ struct tor_tls_t {
                                   * one certificate). */
   /** True iff we should call negotiated_callback when we're done reading. */
   unsigned int got_renegotiate:1;
-  /** Incremented every time we start the server side of a handshake. */
-  uint8_t server_handshake_count;
   size_t wantwrite_n; /**< 0 normally, >0 if we returned wantwrite last
                        * time. */
   /** Last values retrieved from BIO_number_read()/write(); see
@@ -1399,6 +1397,7 @@ tor_tls_get_ciphersuite_name(tor_tls_t *tls)
  * changes state. We use this:
  * <li>To detect renegotiation</li></ul>
  */
+// XXX TvdW
 static void
 tor_tls_server_info_callback(const SSL *ssl, int type, int val)
 {
@@ -1418,8 +1417,6 @@ tor_tls_server_info_callback(const SSL *ssl, int type, int val)
     /* Check whether we're watching for renegotiates.  If so, this is one! */
     if (tls->negotiated_callback)
       tls->got_renegotiate = 1;
-    if (tls->server_handshake_count < 127) /*avoid any overflow possibility*/
-      ++tls->server_handshake_count;
   } else {
     log_warn(LD_BUG, "Couldn't look up the tls for an SSL*. How odd!");
     return;
@@ -2306,14 +2303,6 @@ dn_indicates_v3_cert(X509_NAME *name)
   OPENSSL_free(s);
   return r;
 #endif
-}
-
-/** Return the number of server handshakes that we've noticed doing on
- * <b>tls</b>. */
-int
-tor_tls_get_num_server_handshakes(tor_tls_t *tls)
-{
-  return tls->server_handshake_count;
 }
 
 /** Return true iff the server TLS connection <b>tls</b> got the renegotiation

@@ -1492,27 +1492,10 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
         return;
       }
     } else {
-      const int handshakes = tor_tls_get_num_server_handshakes(conn->tls);
-
-      if (handshakes == 1) {
-        /* v2 or v3 handshake, as a server. Only got one handshake, so
-         * wait for the next one. */
-        // XXX TvdW TODO
-        connection_or_change_state(conn,
-            OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
-      } else if (handshakes == 2) {
-        /* v2 handshake, as a server.  Two handshakes happened already,
-         * so we treat renegotiation as done.
-         */
-      } else if (handshakes > 2) {
-        log_warn(LD_OR, "More than two handshakes done on connection. "
-                 "Closing.");
-        connection_or_close_for_error(conn, 0);
-      } else {
-        log_warn(LD_BUG, "We were unexpectedly told that a connection "
-                 "got %d handshakes. Closing.", handshakes);
-        connection_or_close_for_error(conn, 0);
-      }
+      /* v2 or v3 handshake, as a server. Only got one handshake, so
+       * wait for the next one. */
+      connection_or_change_state(conn,
+          OR_CONN_STATE_TLS_SERVER_RENEGOTIATING);
       return;
     }
 
@@ -1638,6 +1621,7 @@ connection_or_check_valid_tls_handshake(or_connection_t *conn,
   return 0;
 }
 
+// XXX TvdW comment
 /** Called when we (as a connection initiator) have definitively,
  * authenticatedly, learned that ID of the Tor instance on the other
  * side of <b>conn</b> is <b>peer_id</b>.  For v1 and v2 handshakes,

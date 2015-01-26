@@ -77,11 +77,6 @@
 #error "We require OpenSSL >= 0.9.8"
 #endif
 
-/* Enable the "v2" TLS handshake.
- */
-#define V2_HANDSHAKE_SERVER
-#define V2_HANDSHAKE_CLIENT
-
 /* Copied from or.h */
 #define LEGAL_NICKNAME_CHARACTERS \
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -154,7 +149,6 @@ struct tor_tls_t {
   unsigned long last_read_count;
 };
 
-#ifdef V2_HANDSHAKE_CLIENT
 /** An array of fake SSL_CIPHER objects that we use in order to trick OpenSSL
  * in client mode into advertising the ciphers we want.  See
  * rectify_client_ciphers() for details. */
@@ -162,7 +156,6 @@ static SSL_CIPHER *CLIENT_CIPHER_DUMMIES = NULL;
 /** A stack of SSL_CIPHER objects, some real, some fake.
  * See rectify_client_ciphers() for details. */
 static STACK_OF(SSL_CIPHER) *CLIENT_CIPHER_STACK = NULL;
-#endif
 
 /** The ex_data index in which we store a pointer to an SSL object's
  * corresponding tor_tls_t object. */
@@ -477,12 +470,10 @@ tor_tls_free_all(void)
     client_tls_context = NULL;
     tor_tls_context_decref(ctx);
   }
-#ifdef V2_HANDSHAKE_CLIENT
   if (CLIENT_CIPHER_DUMMIES)
     tor_free(CLIENT_CIPHER_DUMMIES);
   if (CLIENT_CIPHER_STACK)
     sk_SSL_CIPHER_free(CLIENT_CIPHER_STACK);
-#endif
 }
 
 /** Return a newly allocated X509 name with commonName <b>cname</b>. */
@@ -1318,7 +1309,6 @@ log_unsupported_ciphers(smartlist_t *unsupported)
 static void
 rectify_client_ciphers(STACK_OF(SSL_CIPHER) **ciphers)
 {
-#ifdef V2_HANDSHAKE_CLIENT
   if (PREDICT_UNLIKELY(!CLIENT_CIPHER_STACK)) {
     /* We need to set CLIENT_CIPHER_STACK to an array of the ciphers
      * we want to use/advertise. */
@@ -1394,10 +1384,6 @@ rectify_client_ciphers(STACK_OF(SSL_CIPHER) **ciphers)
   sk_SSL_CIPHER_free(*ciphers);
   *ciphers = sk_SSL_CIPHER_dup(CLIENT_CIPHER_STACK);
   tor_assert(*ciphers);
-
-#else
-    (void)ciphers;
-#endif
 }
 
 /** Create a new TLS object from a file descriptor, and a flag to

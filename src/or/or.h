@@ -283,6 +283,9 @@ typedef enum {
 /** State for an OR connection client: SSL is handshaking, not done
  * yet. */
 #define OR_CONN_STATE_TLS_HANDSHAKING 3
+/** State for an OR connection server: We've done the SSL handshake, but
+ * haven't yet negotiated versions. */
+#define OR_CONN_STATE_OR_HANDSHAKING 6
 /** State for an OR connection: We're done with our SSL handshake, but we
  * haven't yet negotiated link protocol versions, done a V3 handshake, and
  * sent a netinfo cell. */

@@ -1619,10 +1619,7 @@ tor_tls_handshake(tor_tls_t *tls)
   return r;
 }
 
-/** Perform the final part of the intial TLS handshake on <b>tls</b>.  This
- * should be called for the first handshake only: it determines whether the v1
- * or the v2 handshake was used, and adjusts things for the renegotiation
- * handshake as appropriate.
+/** Perform the final part of the intial TLS handshake on <b>tls</b>.
  *
  * tor_tls_handshake() calls this on its own; you only need to call this if
  * bufferevent is doing the handshake for you.
@@ -1633,11 +1630,7 @@ tor_tls_finish_handshake(tor_tls_t *tls)
   int r = TOR_TLS_DONE;
   if (tls->isServer) {
     SSL_set_info_callback(tls->ssl, NULL);
-    /* This check is redundant, but back when we did it in the callback,
-     * we might have not been able to look up the tor_tls_t if the code
-     * was buggy.  Fixing that. */
-    log_debug(LD_HANDSHAKE, "Completed V2 TLS handshake with client; waiting"
-              " for renegotiation.");
+    log_debug(LD_HANDSHAKE, "Completed V3 TLS handshake with client.");
   } else {
     if (SSL_set_cipher_list(tls->ssl, SERVER_CIPHER_LIST) == 0) {
       tls_log_errors(NULL, LOG_WARN, LD_HANDSHAKE, "re-setting ciphers");

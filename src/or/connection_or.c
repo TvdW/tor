@@ -535,6 +535,7 @@ connection_or_process_inbuf(or_connection_t *conn)
 
       return ret;
     case OR_CONN_STATE_OPEN:
+    case OR_CONN_STATE_OR_HANDSHAKING:
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       return connection_or_process_cells_from_inbuf(conn);
     default:
@@ -623,6 +624,7 @@ connection_or_finished_flushing(or_connection_t *conn)
   switch (conn->base_.state) {
     case OR_CONN_STATE_PROXY_HANDSHAKING:
     case OR_CONN_STATE_OPEN:
+    case OR_CONN_STATE_OR_HANDSHAKING:
     case OR_CONN_STATE_OR_HANDSHAKING_V3:
       break;
     default:
@@ -1420,11 +1422,11 @@ connection_tls_continue_handshake(or_connection_t *conn)
         return connection_or_launch_v3_or_handshake(conn);
         // log_notice(LD_OR,"Done. state was %d.", conn->base_.state);
       } else {
-        /* v2/v3 handshake, but not a client. */
+        /* v3 handshake, but not a client. */
         log_debug(LD_OR, "Done with initial SSL handshake (server-side). "
                          "Expecting VERSIONS cell");
         connection_or_change_state(conn,
-            OR_CONN_STATE_TLS_HANDSHAKING);
+            OR_CONN_STATE_OR_HANDSHAKING);
         connection_stop_writing(TO_CONN(conn));
         connection_start_reading(TO_CONN(conn));
         return 0;
@@ -1469,8 +1471,7 @@ connection_or_handle_event_cb(struct bufferevent *bufev, short event,
       }
     } else {
       /* v3 handshake, as a server */
-      // XXX TvdW how does this make sense? should we move this up a bit?
-      connection_or_change_state(conn, OR_CONN_STATE_TLS_HANDSHAKING);
+      connection_or_change_state(conn, OR_CONN_STATE_OR_HANDSHAKING);
       return;
     }
 

@@ -1479,7 +1479,7 @@ channel_tls_process_versions_cell(var_cell_t *cell, channel_tls_t *chan)
 #endif
 
     if (send_versions) {
-      if (connection_or_send_versions(chan->conn, 1) < 0) {
+      if (connection_or_send_versions(chan->conn) < 0) {
         log_warn(LD_OR, "Couldn't send versions cell");
         connection_or_close_for_error(chan->conn, 0);
         return;

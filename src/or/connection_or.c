@@ -1607,7 +1607,7 @@ connection_or_launch_v3_or_handshake(or_connection_t *conn)
   if (connection_init_or_handshake_state(conn, 1) < 0)
     return -1;
 
-  return connection_or_send_versions(conn, 1);
+  return connection_or_send_versions(conn);
 }
 
 /** Allocate a new connection handshake state for the connection
@@ -1878,20 +1878,15 @@ is_or_protocol_version_known(uint16_t v)
 
 /** Send a VERSIONS cell on <b>conn</b>, telling the other host about the
  * link protocol versions that this Tor can support.
- *
- * If <b>v3_plus</b>, this is part of a V3 protocol handshake, so only
- * allow protocol version v3 or later.  If not <b>v3_plus</b>, this is
- * not part of a v3 protocol handshake, so don't allow protocol v3 or
- * later.
  **/
 int
-connection_or_send_versions(or_connection_t *conn, int v3_plus)
+connection_or_send_versions(or_connection_t *conn)
 {
   var_cell_t *cell;
   int i;
   int n_versions = 0;
-  const int min_version = v3_plus ? 3 : 0;
-  const int max_version = v3_plus ? UINT16_MAX : 2;
+  const int min_version = 3;
+  const int max_version = UINT16_MAX;
   tor_assert(conn->handshake_state &&
              !conn->handshake_state->sent_versions_at);
   cell = var_cell_new(n_or_protocol_versions * 2);

@@ -173,6 +173,13 @@ test_hs_desc_event(void *arg)
   tt_str_op(received_msg,OP_EQ, expected_msg);
   tor_free(received_msg);
 
+  /* test introduce event */
+  control_event_rend_handoff("test-tag", "test-rendezvousdata");
+  expected_msg = "650 INTRODUCE test-tag test-rendezvousdata\r\n";
+  tt_assert(received_msg);
+  tt_str_op(received_msg,OP_EQ, expected_msg);
+  tor_free(received_msg);
+
   /* test received event */
   rend_query.auth_type = REND_BASIC_AUTH;
   control_event_hs_descriptor_received(rend_query.onion_address,

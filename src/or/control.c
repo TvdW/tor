@@ -167,6 +167,9 @@ static int handle_control_closestream(control_connection_t *conn, uint32_t len,
 static int handle_control_closecircuit(control_connection_t *conn,
                                        uint32_t len,
                                        const char *body);
+static int handle_control_perform_rendezvous(control_connection_t *conn,
+                                       uint32_t len,
+                                       const char *body);
 static int handle_control_resolve(control_connection_t *conn, uint32_t len,
                                   const char *body);
 static int handle_control_usefeature(control_connection_t *conn,
@@ -1140,6 +1143,7 @@ static const struct control_event_t control_event_table[] = {
   { EVENT_HS_DESC, "HS_DESC" },
   { EVENT_HS_DESC_CONTENT, "HS_DESC_CONTENT" },
   { EVENT_NETWORK_LIVENESS, "NETWORK_LIVENESS" },
+  { EVENT_REND_HANDOFF, "INTRODUCE" },
   { 0, NULL },
 };
 
@@ -3251,6 +3255,33 @@ handle_control_closecircuit(control_connection_t *conn, uint32_t len,
   return 0;
 }
 
+/** Called when we get a PERFORM-RENDEZVOUS command; try to perform the
+ * rendezvous and report success or failure. */
+static int
+handle_control_perform_rendezvous(control_connection_t *conn,
+                                  uint32_t len,
+                                  const char *body)
+{
+  smartlist_t *args;
+  int result;
+  (void) len;
+
+  args = getargs_helper("PERFORM-RENDEZVOUS", conn, body, 2, 2);
+  if (!args)
+    return 0;
+
+  result = rend_service_perform_rendezvous_from_handoff(
+    smartlist_get(args, 0),
+    smartlist_get(args, 1));
+
+  if (result < 0) {
+    send_control_done(conn); // XXX
+  } else {
+    send_control_done(conn);
+  }
+  return 0;
+}
+
 /** Called when we get a RESOLVE command: start trying to resolve
  * the listed addresses. */
 static int
@@ -4393,6 +4424,9 @@ connection_control_process_inbuf(control_connection_t *conn)
   } else if (!strcasecmp(conn->incoming_cmd, "CLOSECIRCUIT")) {
     if (handle_control_closecircuit(conn, cmd_data_len, args))
       return -1;
+  } else if (!strcasecmp(conn->incoming_cmd, "PERFORM-RENDEZVOUS")) {
+    if (handle_control_perform_rendezvous(conn, cmd_data_len, args))
+      return -1;
   } else if (!strcasecmp(conn->incoming_cmd, "USEFEATURE")) {
     if (handle_control_usefeature(conn, cmd_data_len, args))
       return -1;
@@ -4609,6 +4643,18 @@ write_stream_target_to_buf(entry_connection_t *conn, char *buf, size_t len)
                                      ENTRY_TO_EDGE_CONN(conn)) ? ".onion" : "",
                conn->socks_request->port)<0)
     return -1;
+  return 0;
+}
+
+/** TODO: docs */
+int
+control_event_rend_handoff(const char *tag, const char *rendezvousdata)
+{
+  send_control_event(EVENT_REND_HANDOFF,
+                     "650 INTRODUCE %s %s\r\n",
+                     tag,
+                     rendezvousdata);
+
   return 0;
 }
 

@@ -51,15 +51,23 @@ static int rend_service_load_auth_keys(struct rend_service_t *s,
                                        const char *hfname);
 static struct rend_service_t *rend_service_get_by_pk_digest(
     const char* digest);
+static struct rend_service_t *rend_service_get_by_tag(
+    const char* value);
 static struct rend_service_t *rend_service_get_by_service_id(const char *id);
 static const char *rend_service_escaped_dir(
     const struct rend_service_t *s);
 
-int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
-                                    struct rend_service_t *service,
-                                    rend_intro_point_t *intro_point,
-                                    crypto_pk_t *intro_key,
-                                    char *rend_pk_digest);
+static int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                           struct rend_service_t *service,
+                                           rend_intro_point_t *intro_point,
+                                           crypto_pk_t *intro_key,
+                                           char *rend_pk_digest);
+static int rend_service_handoff_introduce(struct rend_service_t *service,
+                                          rend_intro_point_t *intro_point,
+                                          crypto_pk_t *intro_key,
+                                          char *rend_pk_digest,
+                                          const uint8_t *request,
+                                          size_t request_len);
 
 static ssize_t rend_service_parse_intro_for_v0_or_v1(
     rend_intro_cell_t *intro,
@@ -118,6 +126,9 @@ typedef struct rend_service_t {
   /* Fields specified in config file */
   char *directory; /**< where in the filesystem it stores it. Will be NULL if
                     * this service is ephemeral. */
+  char *tag; /** Name tag given to the HS by the user; used to identify
+               * a hidden service across nodes (when fingerprints
+               * may differ) */
   int dir_group_readable; /**< if 1, allow group read
                              permissions on directory */
   smartlist_t *ports; /**< List of rend_service_port_config_t */
@@ -158,6 +169,9 @@ typedef struct rend_service_t {
   /** If true, we don't close circuits for making requests to unsupported
    * ports. */
   int allow_unknown_ports;
+  /** If false, we send introduce data to the controller instead of
+    * automatically performing the rendezvous */
+  int automatic_rendezvous;
   /** The maximum number of simultanious streams-per-circuit that are allowed
    * to be established, or 0 if no limit is set.
    */
@@ -519,9 +533,11 @@ rend_config_services(const or_options_t *options, int validate_only)
       }
       service = tor_malloc_zero(sizeof(rend_service_t));
       service->directory = tor_strdup(line->value);
+      service->tag = strdup(line->value);
       service->ports = smartlist_new();
       service->intro_period_started = time(NULL);
       service->n_intro_points_wanted = NUM_INTRO_POINTS_DEFAULT;
+      service->automatic_rendezvous= 1;
       continue;
     }
     if (!service) {
@@ -555,6 +571,25 @@ rend_config_services(const or_options_t *options, int validate_only)
       log_info(LD_CONFIG,
                "HiddenServiceAllowUnknownPorts=%d for %s",
                (int)service->allow_unknown_ports, service->directory);
+    } else if (!strcasecmp(line->key, "HiddenServiceAutomaticRendezvous")) {
+      service->automatic_rendezvous = (int)tor_parse_long(line->value,
+                                                         10, 0, 1, &ok, NULL);
+      if (!ok) {
+        log_warn(LD_CONFIG,
+                 "HiddenServiceAutomaticRendezvous should be 0 or 1, not %s",
+                 line->value);
+        rend_service_free(service);
+        return -1;
+      }
+      log_info(LD_CONFIG,
+               "HiddenServiceAutomaticRendezvous=%d for %s",
+               (int)service->allow_unknown_ports, service->directory);
+    } else if (!strcasecmp(line->key, "HiddenServiceTag")) {
+      tor_free(service->tag);
+      service->tag= tor_strdup(line->value);
+      log_info(LD_CONFIG,
+               "HiddenServiceTag=%s for %s",
+               service->tag, service->directory);
     } else if (!strcasecmp(line->key,
                            "HiddenServiceDirGroupReadable")) {
         service->dir_group_readable = (int)tor_parse_long(line->value,
@@ -1355,6 +1390,18 @@ rend_service_get_by_pk_digest(const char* digest)
   return NULL;
 }
 
+/** Return the service whose tag has a value of <b>value</b>, or
+ * NULL if no such service exists.
+ */
+static rend_service_t *
+rend_service_get_by_tag(const char* value)
+{
+  SMARTLIST_FOREACH(rend_service_list, rend_service_t*, s,
+                    if (!strcmp(s->tag,value))
+                        return s);
+  return NULL;
+}
+
 /** Return the service whose service id is <b>id</b>, or NULL if no such
  * service exists.
  */
@@ -1549,13 +1596,17 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     goto err;
   }
 
-  result = rend_service_perform_rendezvous(parsed_req, service, intro_point, intro_key, circuit->rend_data->rend_pk_digest);
+  if (!service->automatic_rendezvous) {
+    result = rend_service_handoff_introduce(service, intro_point, intro_key,
+                                            circuit->rend_data->rend_pk_digest,
+                                            request, request_len);
+  } else {
+    result = rend_service_perform_rendezvous(parsed_req, service, intro_point,
+                                           intro_key,
+                                           circuit->rend_data->rend_pk_digest);
+  }
   if (result < 0) {
     goto log_error;
-  } else if (err_msg) {
-    log_info(LD_REND, "%s on circ %u.", err_msg,
-             (unsigned)circuit->base_.n_circ_id);
-    tor_free(err_msg);
   }
 
   goto done;
@@ -1585,11 +1636,12 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   return status;
 }
 
-int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
-                                    rend_service_t *service,
-                                    rend_intro_point_t *intro_point,
-                                    crypto_pk_t *intro_key,
-                                    char *rend_pk_digest)
+int
+rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                rend_service_t *service,
+                                rend_intro_point_t *intro_point,
+                                crypto_pk_t *intro_key,
+                                char *rend_pk_digest)
 {
   /* Global status stuff */
   int status = 0, result;
@@ -1805,6 +1857,166 @@ int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
   extend_info_free(rp);
 
   return status;
+}
+
+static int
+rend_service_handoff_introduce(struct rend_service_t *service,
+                               rend_intro_point_t *intro_point,
+                               crypto_pk_t *intro_key,
+                               char *rend_pk_digest,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  char buffer[2048], dest_buffer[2048], *intro_key_b64 = NULL;
+  int buffer_length = 0, intro_key_length;
+  int result, state = 0;
+
+  /* Increment our stats counter */
+  ++(intro_point->accepted_introduce2_count);
+
+  /* Add the version number and a null byte */
+  memcpy(buffer, VERSION, strlen(VERSION)+1);
+  buffer_length += strlen(VERSION)+1;
+
+  /* Write the request and its length into the buffer */
+  *(uint32_t*)(buffer+buffer_length) = request_len;
+  buffer_length += sizeof(uint32_t);
+
+  memcpy(buffer+buffer_length, request, request_len);
+  buffer_length += request_len;
+
+  /* Tor needs this internally, so let's send it over */
+  memcpy(buffer+buffer_length, rend_pk_digest, DIGEST_LEN);
+  buffer_length += DIGEST_LEN;
+
+  /* Base64-encode the key with which we can decrypt the cell */
+  result = crypto_pk_base64_encode(intro_key, &intro_key_b64);
+  if (result < 0) {
+    log_warn(LD_REND, "Failed to base64-encode our private key");
+    goto err;
+  }
+  intro_key_length = strlen(intro_key_b64);
+  tor_assert(intro_key_length + buffer_length < sizeof(buffer));
+  memcpy(buffer+buffer_length, intro_key_b64, intro_key_length);
+  buffer_length += intro_key_length;
+
+  /* XXX: we are double-encoding the private key. It's easier than
+   * doing this the right way, but should we change that anyway? */
+  result = base64_encode(dest_buffer, sizeof(dest_buffer),
+                         buffer, buffer_length,
+                         0);
+  tor_assert(result > 0);
+
+  /* Let the controller take care of it now */
+  log_info(LD_REND, "Giving INTRODUCE2 data to the controller");
+  control_event_rend_handoff(service->tag, dest_buffer);
+
+  goto done;
+
+ err:
+  state = -1;
+
+ done:
+  memwipe(buffer, 0, sizeof(buffer));
+  memwipe(dest_buffer, 0, sizeof(dest_buffer));
+
+  return state;
+}
+
+int
+rend_service_perform_rendezvous_from_handoff(const char *tag,
+                                             const char *rendezvousdata)
+{
+  struct rend_service_t *service;
+  char buffer[2048];
+  int result, decoded_len, request_len;
+  int state = 0, pos = 0;
+  uint8_t *request;
+  char *rend_pk_digest;
+  char *err_msg = NULL;
+  rend_intro_cell_t *parsed_req = NULL;
+  crypto_pk_t *intro_key = NULL;
+
+  service = rend_service_get_by_tag(tag);
+  if (!service) {
+    err_msg = tor_strdup("No such service found");
+    goto log_error;
+  }
+
+  /* Our data comes in base64 format, so let's do that first */
+  result = base64_decode(buffer, sizeof(buffer),
+                         rendezvousdata, strlen(rendezvousdata));
+  if (result < 0) {
+    goto err;
+  }
+  decoded_len = result;
+
+  /* Maybe what we got couldn't possibly be valid */
+  if (decoded_len < DIGEST_LEN + sizeof(uint32_t) + 4) {
+    goto err;
+  }
+
+  /* We started with the version number */
+  if (memcmp(buffer+pos, VERSION, strlen(VERSION) + 1) != 0) {
+    log_warn(LD_REND, "Controller received rendezvous data with "
+                      "incorrect version");
+    goto err;
+  }
+  pos += strlen(VERSION) + 1;
+
+  /* Try to find the request */
+  request_len = *(uint32_t*)(buffer + pos);
+  pos += 4;
+  if (pos + request_len + DIGEST_LEN + 4 > decoded_len) {
+    log_warn(LD_REND, "Received malformed rendezvous data");
+    goto err;
+  }
+
+  request = (uint8_t*)(buffer+pos);
+  pos += request_len;
+
+  rend_pk_digest = buffer+pos;
+  pos += DIGEST_LEN;
+
+  /* Parse what we just got */
+  parsed_req =
+    rend_service_begin_parse_intro(request, request_len, 2, &err_msg);
+  if (!parsed_req) {
+    goto log_error;
+  } else if (err_msg) {
+    log_info(LD_REND, "%s", err_msg);
+    tor_free(err_msg);
+  }
+
+  /* Decode the intro key */
+  intro_key = crypto_pk_base64_decode(buffer + pos, sizeof(buffer) - pos);
+
+  /* Perform the rendezvous */
+  result = rend_service_perform_rendezvous(parsed_req, service, NULL,
+                                           intro_key, rend_pk_digest);
+  if (result < 0) {
+    goto log_error;
+  }
+
+  goto done;
+
+ log_error:
+  if (!err_msg) {
+    err_msg = tor_strdup("unknown error for PERFORM-RENDEZVOUS");
+  }
+
+  log_warn(LD_REND, "%s", err_msg);
+
+ err:
+  state = -1;
+  tor_free(err_msg);
+
+ done:
+  memwipe(buffer, 0, sizeof(buffer));
+  if (parsed_req) rend_service_free_intro(parsed_req);
+  if (intro_key) crypto_pk_free(intro_key);
+
+  return state;
 }
 
 /** Given a parsed and decrypted INTRODUCE2, find the rendezvous point or

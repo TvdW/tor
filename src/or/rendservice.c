@@ -55,6 +55,12 @@ static struct rend_service_t *rend_service_get_by_service_id(const char *id);
 static const char *rend_service_escaped_dir(
     const struct rend_service_t *s);
 
+int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                    struct rend_service_t *service,
+                                    rend_intro_point_t *intro_point,
+                                    crypto_pk_t *intro_key,
+                                    char *rend_pk_digest);
+
 static ssize_t rend_service_parse_intro_for_v0_or_v1(
     rend_intro_cell_t *intro,
     const uint8_t *buf,
@@ -1443,10 +1449,8 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
 {
   /* Global status stuff */
   int status = 0, result;
-  const or_options_t *options = get_options();
   char *err_msg = NULL;
   const char *stage_descr = NULL;
-  int reason = END_CIRC_REASON_TORPROTOCOL;
   /* Service/circuit/key stuff we can learn before parsing */
   char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
   rend_service_t *service = NULL;
@@ -1454,18 +1458,6 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   crypto_pk_t *intro_key = NULL;
   /* Parsed cell */
   rend_intro_cell_t *parsed_req = NULL;
-  /* Rendezvous point */
-  extend_info_t *rp = NULL;
-  /* XXX not handled yet */
-  char buf[RELAY_PAYLOAD_SIZE];
-  char keys[DIGEST_LEN+CPATH_KEY_MATERIAL_LEN]; /* Holds KH, Df, Db, Kf, Kb */
-  int i;
-  crypto_dh_t *dh = NULL;
-  origin_circuit_t *launched = NULL;
-  crypt_path_t *cpath = NULL;
-  char hexcookie[9];
-  int circ_needs_uptime;
-  time_t now = time(NULL);
   time_t elapsed;
   int replay;
 
@@ -1557,14 +1549,76 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     goto err;
   }
 
+  result = rend_service_perform_rendezvous(parsed_req, service, intro_point, intro_key, circuit->rend_data->rend_pk_digest);
+  if (result < 0) {
+    goto log_error;
+  } else if (err_msg) {
+    log_info(LD_REND, "%s on circ %u.", err_msg,
+             (unsigned)circuit->base_.n_circ_id);
+    tor_free(err_msg);
+  }
+
+  goto done;
+
+ log_error:
+  if (!err_msg) {
+    if (stage_descr) {
+      tor_asprintf(&err_msg,
+                   "unknown %s error for INTRODUCE2", stage_descr);
+    } else {
+      err_msg = tor_strdup("unknown error for INTRODUCE2");
+    }
+  }
+
+  log_warn(LD_REND, "%s on circ %u", err_msg,
+           (unsigned)circuit->base_.n_circ_id);
+ err:
+  status = -1;
+  tor_free(err_msg);
+
+ done:
+  memwipe(serviceid, 0, sizeof(serviceid));
+
+  /* Free the parsed cell */
+  rend_service_free_intro(parsed_req);
+
+  return status;
+}
+
+int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                    rend_service_t *service,
+                                    rend_intro_point_t *intro_point,
+                                    crypto_pk_t *intro_key,
+                                    char *rend_pk_digest)
+{
+  /* Global status stuff */
+  int status = 0, result;
+  const or_options_t *options = get_options();
+  char *err_msg = NULL;
+  const char *stage_descr = NULL;
+  int reason = END_CIRC_REASON_TORPROTOCOL;
+  /* Rendezvous point */
+  extend_info_t *rp = NULL;
+  /* XXX not handled yet */
+  crypto_dh_t *dh = NULL;
+  origin_circuit_t *launched = NULL;
+  char keys[DIGEST_LEN+CPATH_KEY_MATERIAL_LEN]; /* Holds KH, Df, Db, Kf, Kb */
+  char hexcookie[9];
+  char buf[RELAY_PAYLOAD_SIZE];
+  crypt_path_t *cpath = NULL;
+  int circ_needs_uptime;
+  time_t now = time(NULL);
+  time_t elapsed;
+  int replay;
+  int i;
+
   stage_descr = "decryption";
   /* Now try to decrypt it */
   result = rend_service_decrypt_intro(parsed_req, intro_key, &err_msg);
   if (result < 0) {
     goto log_error;
   } else if (err_msg) {
-    log_info(LD_REND, "%s on circ %u.", err_msg,
-             (unsigned)circuit->base_.n_circ_id);
+    log_info(LD_REND, "%s", err_msg);
     tor_free(err_msg);
   }
 
@@ -1574,8 +1628,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   if (result < 0) {
     goto log_error;
   } else if (err_msg) {
-    log_info(LD_REND, "%s on circ %u.", err_msg,
-             (unsigned)circuit->base_.n_circ_id);
+    log_info(LD_REND, "%s", err_msg);
     tor_free(err_msg);
   }
 
@@ -1585,14 +1638,13 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   if (result < 0) {
     goto log_error;
   } else if (err_msg) {
-    log_info(LD_REND, "%s on circ %u.", err_msg,
-             (unsigned)circuit->base_.n_circ_id);
+    log_info(LD_REND, "%s", err_msg);
     tor_free(err_msg);
   }
   stage_descr = NULL;
 
   /* Increment INTRODUCE2 counter */
-  ++(intro_point->accepted_introduce2_count);
+  if (intro_point) ++(intro_point->accepted_introduce2_count);
 
   /* Find the rendezvous point */
   rp = find_rp_for_intro(parsed_req, &err_msg);
@@ -1691,7 +1743,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     log_warn(LD_REND, "Giving up launching first hop of circuit to rendezvous "
              "point %s for service %s.",
              safe_str_client(extend_info_describe(rp)),
-             serviceid);
+             service->service_id);
     reason = END_CIRC_REASON_CONNECTFAILED;
     goto err;
   }
@@ -1699,13 +1751,13 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
            "Accepted intro; launching circuit to %s "
            "(cookie %s) for service %s.",
            safe_str_client(extend_info_describe(rp)),
-           hexcookie, serviceid);
+           hexcookie, service->service_id);
   tor_assert(launched->build_state);
   /* Fill in the circuit's state. */
 
   launched->rend_data =
     rend_data_service_create(service->service_id,
-                             circuit->rend_data->rend_pk_digest,
+                             rend_pk_digest,
                              parsed_req->rc, service->auth_type);
 
   launched->build_state->service_pending_final_cpath_ref =
@@ -1735,8 +1787,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     }
   }
 
-  log_warn(LD_REND, "%s on circ %u", err_msg,
-           (unsigned)circuit->base_.n_circ_id);
+  log_warn(LD_REND, "%s", err_msg);
  err:
   status = -1;
   if (dh) crypto_dh_free(dh);
@@ -1748,11 +1799,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
  done:
   memwipe(keys, 0, sizeof(keys));
   memwipe(buf, 0, sizeof(buf));
-  memwipe(serviceid, 0, sizeof(serviceid));
   memwipe(hexcookie, 0, sizeof(hexcookie));
-
-  /* Free the parsed cell */
-  rend_service_free_intro(parsed_req);
 
   /* Free rp */
   extend_info_free(rp);

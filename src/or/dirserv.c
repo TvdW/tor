@@ -1792,8 +1792,13 @@ dirserv_get_credible_bandwidth_kb(const node_t *node)
       /* Return zero for unmeasured bandwidth if we are above threshold */
       bw_kb = 0;
     } else {
-      /* Return an advertised bandwidth otherwise */
-      bw_kb = router_get_advertised_bandwidth_capped(node->ri) / 1000;
+      /* Maybe we can take the value from a previous consensus? */
+      if (node->rs && node->rs->bandwidth_kb) {
+        bw_kb = node->rs->bandwidth_kb;
+      } else {
+        /* Return an advertised bandwidth otherwise */
+        bw_kb = router_get_advertised_bandwidth_capped(node->ri) / 1000;
+      }
     }
   } else {
     /* We have the measured bandwidth in mbw */

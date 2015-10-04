@@ -1,0 +1,5 @@
+  o Consensus flags:
+    - When there are no measured bandwidth values for a relay,
+      directory voting now uses bandwidth measurements from the
+      previous consensus for voting on flags such as Fast and HSDir.
+      Implements ticket 11327.

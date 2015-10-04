@@ -71,7 +71,7 @@ static const signed_descriptor_t *get_signed_descriptor_by_fp(
 static was_router_added_t dirserv_add_extrainfo(extrainfo_t *ei,
                                                 const char **msg);
 static uint32_t dirserv_get_bandwidth_for_router_kb(const routerinfo_t *ri);
-static uint32_t dirserv_get_credible_bandwidth_kb(const routerinfo_t *ri);
+static uint32_t dirserv_get_credible_bandwidth_kb(const node_t *node);
 
 /************** Fingerprint handling code ************/
 
@@ -1311,14 +1311,14 @@ real_uptime(const routerinfo_t *router, time_t now)
     return router->uptime + (now - router->cache_info.published_on);
 }
 
-/** Return 1 if <b>router</b> is not suitable for these parameters, else 0.
+/** Return 1 if <b>node</b> is not suitable for these parameters, else 0.
  * If <b>need_uptime</b> is non-zero, we require a minimum uptime.
  * If <b>need_capacity</b> is non-zero, we require a minimum advertised
  * bandwidth.
  */
 static int
 dirserv_thinks_router_is_unreliable(time_t now,
-                                    routerinfo_t *router,
+                                    node_t *node,
                                     int need_uptime, int need_capacity)
 {
   if (need_uptime) {
@@ -1329,20 +1329,20 @@ dirserv_thinks_router_is_unreliable(time_t now,
        * hit a point where we need to reset a lot of authorities at once,
        * none of them would be in a position to declare Stable.
        */
-      long uptime = real_uptime(router, now);
+      long uptime = real_uptime(node->ri, now);
       if ((unsigned)uptime < stable_uptime &&
           (unsigned)uptime < UPTIME_TO_GUARANTEE_STABLE)
         return 1;
     } else {
       double mtbf =
-        rep_hist_get_stability(router->cache_info.identity_digest, now);
+        rep_hist_get_stability(node->ri->cache_info.identity_digest, now);
       if (mtbf < stable_mtbf &&
           mtbf < MTBF_TO_GUARANTEE_STABLE)
         return 1;
     }
   }
   if (need_capacity) {
-    uint32_t bw_kb = dirserv_get_credible_bandwidth_kb(router);
+    uint32_t bw_kb = dirserv_get_credible_bandwidth_kb(node);
     if (bw_kb < fast_bandwidth_kb)
       return 1;
   }
@@ -1410,7 +1410,7 @@ router_counts_toward_thresholds(const node_t *node, time_t now,
 
   return node->ri && router_is_active(node->ri, node, now) &&
     !digestmap_get(omit_as_sybil, node->identity) &&
-    (dirserv_get_credible_bandwidth_kb(node->ri) >= min_bw_kb) &&
+    (dirserv_get_credible_bandwidth_kb(node) >= min_bw_kb) &&
     (have_mbw || !require_mbw);
 }
 
@@ -1483,7 +1483,8 @@ dirserv_compute_performance_thresholds(routerlist_t *rl,
       uptimes[n_active] = (uint32_t)real_uptime(ri, now);
       mtbfs[n_active] = rep_hist_get_stability(id, now);
       tks  [n_active] = rep_hist_get_weighted_time_known(id, now);
-      bandwidths_kb[n_active] = bw_kb = dirserv_get_credible_bandwidth_kb(ri);
+      bandwidths_kb[n_active] = bw_kb =
+        dirserv_get_credible_bandwidth_kb(node);
       if (!node->is_exit || node->is_bad_exit) {
         bandwidths_excluding_exits_kb[n_active_nonexit] = bw_kb;
         ++n_active_nonexit;
@@ -1775,23 +1776,24 @@ dirserv_count_measured_bws(routerlist_t *rl)
  * bandwidths, we don't want to ever give flags to unmeasured routers, so
  * return 0. */
 static uint32_t
-dirserv_get_credible_bandwidth_kb(const routerinfo_t *ri)
+dirserv_get_credible_bandwidth_kb(const node_t *node)
 {
   int threshold;
   uint32_t bw_kb = 0;
   long mbw_kb;
 
-  tor_assert(ri);
+  tor_assert(node && node->ri);
   /* Check if we have a measured bandwidth, and check the threshold if not */
-  if (!(dirserv_query_measured_bw_cache_kb(ri->cache_info.identity_digest,
-                                       &mbw_kb, NULL))) {
+  if (!(dirserv_query_measured_bw_cache_kb(node->ri->cache_info
+                                             .identity_digest,
+                                           &mbw_kb, NULL))) {
     threshold = get_options()->MinMeasuredBWsForAuthToIgnoreAdvertised;
     if (routers_with_measured_bw > threshold) {
       /* Return zero for unmeasured bandwidth if we are above threshold */
       bw_kb = 0;
     } else {
       /* Return an advertised bandwidth otherwise */
-      bw_kb = router_get_advertised_bandwidth_capped(ri) / 1000;
+      bw_kb = router_get_advertised_bandwidth_capped(node->ri) / 1000;
     }
   } else {
     /* We have the measured bandwidth in mbw */
@@ -2140,7 +2142,7 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
                                  int listbadexits)
 {
   const or_options_t *options = get_options();
-  uint32_t routerbw_kb = dirserv_get_credible_bandwidth_kb(ri);
+  uint32_t routerbw_kb = dirserv_get_credible_bandwidth_kb(node);
 
   memset(rs, 0, sizeof(routerstatus_t));
 
@@ -2150,9 +2152,9 @@ set_routerstatus_from_routerinfo(routerstatus_t *rs,
   /* Already set by compute_performance_thresholds. */
   rs->is_exit = node->is_exit;
   rs->is_stable = node->is_stable =
-    !dirserv_thinks_router_is_unreliable(now, ri, 1, 0);
+    !dirserv_thinks_router_is_unreliable(now, node, 1, 0);
   rs->is_fast = node->is_fast =
-    !dirserv_thinks_router_is_unreliable(now, ri, 0, 1);
+    !dirserv_thinks_router_is_unreliable(now, node, 0, 1);
   rs->is_flagged_running = node->is_running; /* computed above */
 
   rs->is_valid = node->is_valid;

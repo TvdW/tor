@@ -1594,22 +1594,6 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   /* Increment INTRODUCE2 counter */
   ++(intro_point->accepted_introduce2_count);
 
-  /* Find the rendezvous point */
-  rp = find_rp_for_intro(parsed_req, &err_msg);
-  if (!rp)
-    goto log_error;
-
-  /* Check if we'd refuse to talk to this router */
-  if (options->StrictNodes &&
-      routerset_contains_extendinfo(options->ExcludeNodes, rp)) {
-    log_warn(LD_REND, "Client asked to rendezvous at a relay that we "
-             "exclude, and StrictNodes is set. Refusing service.");
-    reason = END_CIRC_REASON_INTERNAL; /* XXX might leak why we refused */
-    goto err;
-  }
-
-  base16_encode(hexcookie, 9, (const char *)(parsed_req->rc), 4);
-
   /* Check whether there is a past request with the same Diffie-Hellman,
    * part 1. */
   replay = replaycache_add_test_and_elapsed(
@@ -1654,6 +1638,20 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     }
   }
 
+  /* Find the rendezvous point */
+  rp = find_rp_for_intro(parsed_req, &err_msg);
+  if (!rp)
+    goto log_error;
+
+  /* Check if we'd refuse to talk to this router */
+  if (options->StrictNodes &&
+      routerset_contains_extendinfo(options->ExcludeNodes, rp)) {
+    log_warn(LD_REND, "Client asked to rendezvous at a relay that we "
+             "exclude, and StrictNodes is set. Refusing service.");
+    reason = END_CIRC_REASON_INTERNAL; /* XXX might leak why we refused */
+    goto err;
+  }
+
   /* Try DH handshake... */
   dh = crypto_dh_new(DH_TYPE_REND);
   if (!dh || crypto_dh_generate_public(dh)<0) {
@@ -1695,6 +1693,8 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     reason = END_CIRC_REASON_CONNECTFAILED;
     goto err;
   }
+
+  base16_encode(hexcookie, 9, (const char *)(parsed_req->rc), 4);
   log_info(LD_REND,
            "Accepted intro; launching circuit to %s "
            "(cookie %s) for service %s.",

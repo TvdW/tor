@@ -55,6 +55,9 @@ static struct rend_service_t *rend_service_get_by_service_id(const char *id);
 static const char *rend_service_escaped_dir(
     const struct rend_service_t *s);
 
+static int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                           struct rend_service_t *service);
+
 static ssize_t rend_service_parse_intro_for_v0_or_v1(
     rend_intro_cell_t *intro,
     const uint8_t *buf,
@@ -1443,10 +1446,8 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
 {
   /* Global status stuff */
   int status = 0, result;
-  const or_options_t *options = get_options();
   char *err_msg = NULL;
   const char *stage_descr = NULL;
-  int reason = END_CIRC_REASON_TORPROTOCOL;
   /* Service/circuit/key stuff we can learn before parsing */
   char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
   rend_service_t *service = NULL;
@@ -1454,18 +1455,6 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   crypto_pk_t *intro_key = NULL;
   /* Parsed cell */
   rend_intro_cell_t *parsed_req = NULL;
-  /* Rendezvous point */
-  extend_info_t *rp = NULL;
-  /* XXX not handled yet */
-  char buf[RELAY_PAYLOAD_SIZE];
-  char keys[DIGEST_LEN+CPATH_KEY_MATERIAL_LEN]; /* Holds KH, Df, Db, Kf, Kb */
-  int i;
-  crypto_dh_t *dh = NULL;
-  origin_circuit_t *launched = NULL;
-  crypt_path_t *cpath = NULL;
-  char hexcookie[9];
-  int circ_needs_uptime;
-  time_t now = time(NULL);
   time_t elapsed;
   int replay;
 
@@ -1627,16 +1616,72 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
       } else {
         log_info(LD_REND, "The authorization data that are contained in "
                  "the INTRODUCE2 cell are invalid. Dropping cell.");
-        reason = END_CIRC_REASON_CONNECTFAILED;
         goto err;
       }
     } else {
       log_info(LD_REND, "INTRODUCE2 cell does not contain authentication "
                "data, but we require client authorization. Dropping cell.");
-      reason = END_CIRC_REASON_CONNECTFAILED;
       goto err;
     }
   }
+
+  result = rend_service_perform_rendezvous(parsed_req, service);
+  if (result < 0) {
+    goto log_error;
+  }
+  goto done;
+
+ log_error:
+  if (!err_msg) {
+    if (stage_descr) {
+      tor_asprintf(&err_msg,
+                   "unknown %s error for INTRODUCE2", stage_descr);
+    } else {
+      err_msg = tor_strdup("unknown error for INTRODUCE2");
+    }
+  }
+
+  log_warn(LD_REND, "%s on circ %u", err_msg,
+           (unsigned)circuit->base_.n_circ_id);
+ err:
+  status = -1;
+  tor_free(err_msg);
+
+ done:
+  memwipe(serviceid, 0, sizeof(serviceid));
+
+  /* Free the parsed cell */
+  rend_service_free_intro(parsed_req);
+
+  return status;
+}
+
+int
+rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
+                                rend_service_t *service)
+{
+  /* Global status stuff */
+  int status = 0;
+  const or_options_t *options = get_options();
+  char *err_msg = NULL;
+  int reason = END_CIRC_REASON_TORPROTOCOL;
+  /* Rendezvous point */
+  extend_info_t *rp = NULL;
+  crypto_dh_t *dh = NULL;
+  origin_circuit_t *launched = NULL;
+  crypt_path_t *cpath = NULL;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  char hexcookie[9];
+  time_t now = time(NULL);
+  int i;
+  int circ_needs_uptime;
+  char keys[DIGEST_LEN+CPATH_KEY_MATERIAL_LEN]; /* Holds KH, Df, Db, Kf, Kb */
+  /* XXX not handled yet */
+  char buf[RELAY_PAYLOAD_SIZE];
+
+  /* We'll use this in a bazillion log messages */
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32+1,
+                service->pk_digest, REND_SERVICE_ID_LEN);
 
   /* Find the rendezvous point */
   rp = find_rp_for_intro(parsed_req, &err_msg);
@@ -1705,7 +1750,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
 
   launched->rend_data =
     rend_data_service_create(service->service_id,
-                             circuit->rend_data->rend_pk_digest,
+                             service->pk_digest,
                              parsed_req->rc, service->auth_type);
 
   launched->build_state->service_pending_final_cpath_ref =
@@ -1727,16 +1772,10 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
 
  log_error:
   if (!err_msg) {
-    if (stage_descr) {
-      tor_asprintf(&err_msg,
-                   "unknown %s error for INTRODUCE2", stage_descr);
-    } else {
-      err_msg = tor_strdup("unknown error for INTRODUCE2");
-    }
+    err_msg = tor_strdup("unknown error for INTRODUCE2");
   }
 
-  log_warn(LD_REND, "%s on circ %u", err_msg,
-           (unsigned)circuit->base_.n_circ_id);
+  log_warn(LD_REND, "%s", err_msg);
  err:
   status = -1;
   if (dh) crypto_dh_free(dh);
@@ -1750,9 +1789,6 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   memwipe(buf, 0, sizeof(buf));
   memwipe(serviceid, 0, sizeof(serviceid));
   memwipe(hexcookie, 0, sizeof(hexcookie));
-
-  /* Free the parsed cell */
-  rend_service_free_intro(parsed_req);
 
   /* Free rp */
   extend_info_free(rp);

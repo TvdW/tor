@@ -72,6 +72,8 @@ int control_event_my_descriptor_changed(void);
 int control_event_network_liveness_update(int liveness);
 int control_event_networkstatus_changed(smartlist_t *statuses);
 
+int control_event_rend_handoff(const char *tag, const char *rendezvousdata);
+
 int control_event_newconsensus(const networkstatus_t *consensus);
 int control_event_networkstatus_changed_single(const routerstatus_t *rs);
 int control_event_general_status(int severity, const char *format, ...)
@@ -189,7 +191,8 @@ void control_free_all(void);
 #define EVENT_HS_DESC                 0x0021
 #define EVENT_HS_DESC_CONTENT         0x0022
 #define EVENT_NETWORK_LIVENESS        0x0023
-#define EVENT_MAX_                    0x0023
+#define EVENT_REND_HANDOFF            0x0024
+#define EVENT_MAX_                    0x0024
 
 /* sizeof(control_connection_t.event_mask) in bits, currently a uint64_t */
 #define EVENT_CAPACITY_               0x0040

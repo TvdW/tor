@@ -86,6 +86,8 @@ int rend_service_receive_introduction(origin_circuit_t *circuit,
 int rend_service_decrypt_intro(rend_intro_cell_t *request,
                                crypto_pk_t *key,
                                char **err_msg_out);
+int rend_service_perform_rendezvous_from_handoff(const char *tag,
+                                                 const char *rendezvousdata);
 void rend_service_free_intro(rend_intro_cell_t *request);
 rend_intro_cell_t * rend_service_begin_parse_intro(const uint8_t *request,
                                                    size_t request_len,

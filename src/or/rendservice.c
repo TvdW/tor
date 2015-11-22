@@ -20,6 +20,7 @@
 #include "main.h"
 #include "networkstatus.h"
 #include "nodelist.h"
+#include "introduce_handoff.h"
 #include "rendclient.h"
 #include "rendcommon.h"
 #include "rendservice.h"
@@ -51,12 +52,16 @@ static int rend_service_load_auth_keys(struct rend_service_t *s,
                                        const char *hfname);
 static struct rend_service_t *rend_service_get_by_pk_digest(
     const char* digest);
+static struct rend_service_t *rend_service_get_by_tag(
+    const char* value);
 static struct rend_service_t *rend_service_get_by_service_id(const char *id);
 static const char *rend_service_escaped_dir(
     const struct rend_service_t *s);
 
 static int rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
                                            struct rend_service_t *service);
+static int rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
+                                          struct rend_service_t *service);
 
 static ssize_t rend_service_parse_intro_for_v0_or_v1(
     rend_intro_cell_t *intro,
@@ -115,6 +120,9 @@ typedef struct rend_service_t {
   /* Fields specified in config file */
   char *directory; /**< where in the filesystem it stores it. Will be NULL if
                     * this service is ephemeral. */
+  char *tag; /** Name tag given to the HS by the user; used to identify
+               * a hidden service across nodes (when fingerprints
+               * may differ) */
   int dir_group_readable; /**< if 1, allow group read
                              permissions on directory */
   smartlist_t *ports; /**< List of rend_service_port_config_t */
@@ -155,6 +163,9 @@ typedef struct rend_service_t {
   /** If true, we don't close circuits for making requests to unsupported
    * ports. */
   int allow_unknown_ports;
+  /** If false, we send introduce data to the controller instead of
+    * automatically performing the rendezvous */
+  int automatic_rendezvous;
   /** The maximum number of simultanious streams-per-circuit that are allowed
    * to be established, or 0 if no limit is set.
    */
@@ -516,9 +527,11 @@ rend_config_services(const or_options_t *options, int validate_only)
       }
       service = tor_malloc_zero(sizeof(rend_service_t));
       service->directory = tor_strdup(line->value);
+      service->tag = strdup(line->value);
       service->ports = smartlist_new();
       service->intro_period_started = time(NULL);
       service->n_intro_points_wanted = NUM_INTRO_POINTS_DEFAULT;
+      service->automatic_rendezvous = 1;
       continue;
     }
     if (!service) {
@@ -552,6 +565,25 @@ rend_config_services(const or_options_t *options, int validate_only)
       log_info(LD_CONFIG,
                "HiddenServiceAllowUnknownPorts=%d for %s",
                (int)service->allow_unknown_ports, service->directory);
+    } else if (!strcasecmp(line->key, "HiddenServiceAutomaticRendezvous")) {
+      service->automatic_rendezvous = (int)tor_parse_long(line->value,
+                                                         10, 0, 1, &ok, NULL);
+      if (!ok) {
+        log_warn(LD_CONFIG,
+                 "HiddenServiceAutomaticRendezvous should be 0 or 1, not %s",
+                 line->value);
+        rend_service_free(service);
+        return -1;
+      }
+      log_info(LD_CONFIG,
+               "HiddenServiceAutomaticRendezvous=%d for %s",
+               (int)service->allow_unknown_ports, service->directory);
+    } else if (!strcasecmp(line->key, "HiddenServiceTag")) {
+      tor_free(service->tag);
+      service->tag= tor_strdup(line->value);
+      log_info(LD_CONFIG,
+               "HiddenServiceTag=%s for %s",
+               service->tag, service->directory);
     } else if (!strcasecmp(line->key,
                            "HiddenServiceDirGroupReadable")) {
         service->dir_group_readable = (int)tor_parse_long(line->value,
@@ -1352,6 +1384,18 @@ rend_service_get_by_pk_digest(const char* digest)
   return NULL;
 }
 
+/** Return the service whose tag has a value of <b>value</b>, or
+ * NULL if no such service exists.
+ */
+static rend_service_t *
+rend_service_get_by_tag(const char* value)
+{
+  SMARTLIST_FOREACH(rend_service_list, rend_service_t*, s,
+                    if (!strcmp(s->tag,value))
+                        return s);
+  return NULL;
+}
+
 /** Return the service whose service id is <b>id</b>, or NULL if no such
  * service exists.
  */
@@ -1625,7 +1669,11 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     }
   }
 
-  result = rend_service_perform_rendezvous(parsed_req, service);
+  if (service->automatic_rendezvous) {
+    result = rend_service_perform_rendezvous(parsed_req, service);
+  } else {
+    result = rend_service_handoff_introduce(parsed_req, service);
+  }
   if (result < 0) {
     goto log_error;
   }
@@ -1794,6 +1842,148 @@ rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
   extend_info_free(rp);
 
   return status;
+}
+
+int
+rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
+                               rend_service_t *service)
+{
+  int state = 0, result;
+  char *err_msg = NULL;
+  char buffer[2048];
+  introduction_handoff_v0_t *handoff = NULL;
+  int encoded_len;
+  uint8_t *encoded = NULL;
+
+  /* Make sure that what we have is sane */
+  tor_assert(parsed_req->plaintext && parsed_req->plaintext_len);
+
+  /* Allocate and setup our handoff encoder */
+  handoff = introduction_handoff_v0_new();
+  if (!handoff) {
+    err_msg = tor_strdup("Unable to create new handoff object");
+    goto err;
+  }
+
+  handoff->plaintext_len = parsed_req->plaintext_len;
+  introduction_handoff_v0_setlen_plaintext(handoff,
+                                           parsed_req->plaintext_len);
+  memcpy(introduction_handoff_v0_getarray_plaintext(handoff),
+         parsed_req->plaintext, parsed_req->plaintext_len);
+
+  encoded_len = introduction_handoff_v0_encoded_len(handoff);
+  encoded = tor_malloc_zero(encoded_len);
+  result =
+    introduction_handoff_v0_encode(encoded, encoded_len, handoff);
+  if (result < 0) {
+    err_msg = tor_strdup("Failed to encode introduction message");
+    goto err;
+  }
+  encoded_len = result; /* Adjust if needed */
+
+  /* Base64-encode our data. This takes care of the length check */
+  result = base64_encode(buffer, sizeof(buffer),
+                         (char*)encoded, encoded_len, 0);
+  if (result < 0) {
+    err_msg = tor_strdup("Failed to base64-encode the intro msg");
+    goto err;
+  }
+
+  /* Send our data to the controller */
+  control_event_rend_handoff(service->tag, buffer);
+
+  goto done;
+
+ err:
+  state = -1;
+  if (err_msg) {
+    log_warn(LD_REND, "%s", err_msg);
+    tor_free(err_msg);
+  }
+
+ done:
+  if (handoff)
+    introduction_handoff_v0_free(handoff);
+  if (encoded)
+    tor_free(encoded);
+
+  return state;
+}
+
+int
+rend_service_perform_rendezvous_from_handoff(const char *tag,
+                                             const char *rendezvousdata)
+{
+  int state = 0;
+  struct rend_service_t *service;
+  uint8_t buffer[2048];
+  int result, decoded_len;
+  char *err_msg = NULL;
+  rend_intro_cell_t *parsed_req = NULL;
+  introduction_handoff_v0_t *handoff;
+
+  service = rend_service_get_by_tag(tag);
+  if (!service) {
+    err_msg = tor_strdup("No such service found");
+    goto log_error;
+  }
+
+  /* Our data comes in base64 format, so let's do that first */
+  result = base64_decode((char*)buffer, sizeof(buffer),
+                         rendezvousdata, strlen(rendezvousdata));
+  if (result < 0) {
+    goto log_error;
+  }
+  decoded_len = result;
+
+  result = introduction_handoff_v0_parse(&handoff,
+                                         buffer, decoded_len);
+  if (result < 0) {
+    goto log_error;
+  }
+
+  /* Build a rend_intro_cell_t */
+  parsed_req = tor_malloc_zero(sizeof(*parsed_req));
+  parsed_req->plaintext = tor_malloc(handoff->plaintext_len);
+  memcpy(parsed_req->plaintext,
+         introduction_handoff_v0_getarray_plaintext(handoff),
+         handoff->plaintext_len);
+  parsed_req->plaintext_len = handoff->plaintext_len;
+  parsed_req->type = 2;
+
+  result = rend_service_parse_intro_plaintext(parsed_req, &err_msg);
+  if (result < 0) {
+    goto log_error;
+  }
+
+  result = rend_service_validate_intro_late(parsed_req, &err_msg);
+  if (result < 0) {
+    goto log_error;
+  }
+
+  /* Perform the rendezvous */
+  result = rend_service_perform_rendezvous(parsed_req, service);
+  if (result < 0) {
+    goto log_error;
+  }
+
+  goto done;
+
+ log_error:
+  if (!err_msg) {
+    err_msg = tor_strdup("unknown error for PERFORM-RENDEZVOUS");
+  }
+
+  log_warn(LD_REND, "%s", err_msg);
+
+  state = -1;
+  tor_free(err_msg);
+
+ done:
+  memwipe(buffer, 0, sizeof(buffer));
+  if (parsed_req) rend_service_free_intro(parsed_req);
+
+  return state;
 }
 
 /** Given a parsed and decrypted INTRODUCE2, find the rendezvous point or

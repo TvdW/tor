@@ -1,0 +1,4 @@
+  o Major features (controller):
+    - New "PERFORM-RENDEZVOUS" command and "INTRODUCE_HANDOFF" event to
+      allow load-balancing hidden service traffic between tor
+      instances. Closes ticket 17254, implements proposal 255.

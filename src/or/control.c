@@ -3282,7 +3282,7 @@ handle_control_perform_rendezvous(control_connection_t *conn,
     smartlist_get(args, 1));
 
   if (result < 0) {
-    send_control_done(conn); // XXX
+    connection_printf_to_buf(conn, "551 Invalid arguments\r\n");
   } else {
     send_control_done(conn);
   }

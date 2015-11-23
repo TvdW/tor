@@ -1850,7 +1850,7 @@ rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
 {
   int state = 0, result;
   char *err_msg = NULL;
-  char buffer[2048];
+  char buffer[1024];
   introduction_handoff_v0_t *handoff = NULL;
   int encoded_len;
   uint8_t *encoded = NULL;
@@ -1902,10 +1902,13 @@ rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
   }
 
  done:
+  memwipe(buffer, 0, sizeof(buffer));
   if (handoff)
     introduction_handoff_v0_free(handoff);
-  if (encoded)
+  if (encoded) {
+    memwipe(encoded, 0, encoded_len);
     tor_free(encoded);
+  }
 
   return state;
 }
@@ -1916,7 +1919,7 @@ rend_service_perform_rendezvous_from_handoff(const char *tag,
 {
   int state = 0;
   struct rend_service_t *service;
-  uint8_t buffer[2048];
+  uint8_t buffer[1024];
   int result, decoded_len;
   char *err_msg = NULL;
   rend_intro_cell_t *parsed_req = NULL;

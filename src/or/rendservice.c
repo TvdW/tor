@@ -1480,9 +1480,7 @@ rend_check_authorization(rend_service_t *service,
  * Handle cells
  ******/
 
-/** Respond to an INTRODUCE2 cell by launching a circuit to the chosen
- * rendezvous point.
- */
+/** Handle an INTRODUCE2 cell by decrypting the cell */
 int
 rend_service_receive_introduction(origin_circuit_t *circuit,
                                   const uint8_t *request,
@@ -1669,6 +1667,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
     }
   }
 
+  /* Do we rendezvous, or do well the controller? */
   if (service->automatic_rendezvous) {
     result = rend_service_perform_rendezvous(parsed_req, service);
   } else {
@@ -1704,6 +1703,7 @@ rend_service_receive_introduction(origin_circuit_t *circuit,
   return status;
 }
 
+/** Perform the rendezvous by launching a circuit to the rendezvous point */
 int
 rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
                                 rend_service_t *service)
@@ -1844,6 +1844,8 @@ rend_service_perform_rendezvous(rend_intro_cell_t *parsed_req,
   return status;
 }
 
+/** Send the rendezvous information to the controller so that another node
+ * can do the circuit launching and handshaking */
 int
 rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
                                rend_service_t *service)
@@ -1865,6 +1867,7 @@ rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
     goto err;
   }
 
+  /* Fill in the data */
   handoff->plaintext_len = parsed_req->plaintext_len;
   introduction_handoff_v0_setlen_plaintext(handoff,
                                            parsed_req->plaintext_len);
@@ -1913,6 +1916,8 @@ rend_service_handoff_introduce(rend_intro_cell_t *parsed_req,
   return state;
 }
 
+/** Perform the handshake by using rendezvous data passed to us by the
+ * controller (see rend_service_handoff_introduce) */
 int
 rend_service_perform_rendezvous_from_handoff(const char *tag,
                                              const char *rendezvousdata)

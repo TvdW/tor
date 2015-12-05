@@ -1,5 +1,7 @@
+const INTRODUCTION_MAGIC = 0x3FFE4385;
+
 struct introduction_handoff_v0 {
-  u32 blob_magic;
+  u32 blob_magic IN [INTRODUCTION_MAGIC];
   u16 blob_version IN [0];
   u16 plaintext_len;
   u8 plaintext[plaintext_len];

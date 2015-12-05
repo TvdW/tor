@@ -34,6 +34,7 @@ introduction_handoff_v0_new(void)
   introduction_handoff_v0_t *val = trunnel_calloc(1, sizeof(introduction_handoff_v0_t));
   if (NULL == val)
     return NULL;
+  val->blob_magic = INTRODUCTION_MAGIC;
   return val;
 }
 
@@ -65,6 +66,10 @@ introduction_handoff_v0_get_blob_magic(introduction_handoff_v0_t *inp)
 int
 introduction_handoff_v0_set_blob_magic(introduction_handoff_v0_t *inp, uint32_t val)
 {
+  if (! ((val == INTRODUCTION_MAGIC))) {
+     TRUNNEL_SET_ERROR_CODE(inp);
+     return -1;
+  }
   inp->blob_magic = val;
   return 0;
 }
@@ -158,6 +163,8 @@ introduction_handoff_v0_check(const introduction_handoff_v0_t *obj)
     return "Object was NULL";
   if (obj->trunnel_error_code_)
     return "A set function failed on this object";
+  if (! (obj->blob_magic == INTRODUCTION_MAGIC))
+    return "Integer out of bounds";
   if (! (obj->blob_version == 0))
     return "Integer out of bounds";
   if (TRUNNEL_DYNARRAY_LEN(&obj->plaintext) != obj->plaintext_len)
@@ -174,7 +181,7 @@ introduction_handoff_v0_encoded_len(const introduction_handoff_v0_t *obj)
      return -1;
 
 
-  /* Length of u32 blob_magic */
+  /* Length of u32 blob_magic IN [INTRODUCTION_MAGIC] */
   result += 4;
 
   /* Length of u16 blob_version IN [0] */
@@ -212,7 +219,7 @@ introduction_handoff_v0_encode(uint8_t *output, const size_t avail, const introd
   trunnel_assert(encoded_len >= 0);
 #endif
 
-  /* Encode u32 blob_magic */
+  /* Encode u32 blob_magic IN [INTRODUCTION_MAGIC] */
   trunnel_assert(written <= avail);
   if (avail - written < 4)
     goto truncated;
@@ -279,10 +286,12 @@ introduction_handoff_v0_parse_into(introduction_handoff_v0_t *obj, const uint8_t
   ssize_t result = 0;
   (void)result;
 
-  /* Parse u32 blob_magic */
+  /* Parse u32 blob_magic IN [INTRODUCTION_MAGIC] */
   CHECK_REMAINING(4, truncated);
   obj->blob_magic = trunnel_ntohl(trunnel_get_uint32(ptr));
   remaining -= 4; ptr += 4;
+  if (! (obj->blob_magic == INTRODUCTION_MAGIC))
+    goto fail;
 
   /* Parse u16 blob_version IN [0] */
   CHECK_REMAINING(2, truncated);

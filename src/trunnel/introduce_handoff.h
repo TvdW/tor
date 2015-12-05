@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "trunnel.h"
 
+#define INTRODUCTION_MAGIC 1073628037
 #if !defined(TRUNNEL_OPAQUE) && !defined(TRUNNEL_OPAQUE_INTRODUCTION_HANDOFF_V0)
 struct introduction_handoff_v0_st {
   uint32_t blob_magic;

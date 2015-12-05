@@ -72,7 +72,8 @@ int control_event_my_descriptor_changed(void);
 int control_event_network_liveness_update(int liveness);
 int control_event_networkstatus_changed(smartlist_t *statuses);
 
-int control_event_rend_handoff(const char *tag, const char *rendezvousdata);
+MOCK_DECL(int, control_event_rend_handoff, (const char *tag,
+                                            const char *rendezvousdata));
 
 int control_event_newconsensus(const networkstatus_t *consensus);
 int control_event_networkstatus_changed_single(const routerstatus_t *rs);

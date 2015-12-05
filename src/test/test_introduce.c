@@ -5,6 +5,7 @@
 #include "crypto.h"
 #include "or.h"
 #include "test.h"
+#include "control.h"
 
 #define RENDSERVICE_PRIVATE
 #include "rendservice.h"
@@ -248,13 +249,18 @@ static uint8_t v3_basic_auth_test_plaintext[] =
 static void do_decrypt_test(uint8_t *plaintext, size_t plaintext_len);
 static void do_early_parse_test(uint8_t *plaintext, size_t plaintext_len);
 static void do_late_parse_test(uint8_t *plaintext, size_t plaintext_len);
+static void do_handoff_test(uint8_t *plaintext, size_t plaintext_len);
 static void do_parse_test(uint8_t *plaintext, size_t plaintext_len, int phase);
 static ssize_t make_intro_from_plaintext(
     void *buf, size_t len, crypto_pk_t *key, void **cell_out);
 
+static int control_event_rend_handoff_mocked(const char *tag,
+                                             const char *data);
+
 #define EARLY_PARSE_ONLY 1
 #define DECRYPT_ONLY 2
-#define ALL_PARSING 3
+#define LATE_PARSE_ONLY 3
+#define ALL_PARSING 4
 
 static void
 do_early_parse_test(uint8_t *plaintext, size_t plaintext_len)
@@ -271,7 +277,32 @@ do_decrypt_test(uint8_t *plaintext, size_t plaintext_len)
 static void
 do_late_parse_test(uint8_t *plaintext, size_t plaintext_len)
 {
+  do_parse_test(plaintext, plaintext_len, LATE_PARSE_ONLY);
+}
+
+static void
+do_handoff_test(uint8_t *plaintext, size_t plaintext_len)
+{
   do_parse_test(plaintext, plaintext_len, ALL_PARSING);
+}
+
+/** Test utility function: stores (copies of) the data we wanted to handoff */
+char *from_mocked_handoff_tag;
+char *from_mocked_handoff_data;
+
+static int
+control_event_rend_handoff_mocked(const char *tag,
+                                  const char *data)
+{
+  if (from_mocked_handoff_tag != NULL)
+    tor_free(from_mocked_handoff_tag);
+  if (from_mocked_handoff_data != NULL)
+    tor_free(from_mocked_handoff_data);
+
+  from_mocked_handoff_tag = tor_strdup(tag);
+  from_mocked_handoff_data = tor_strdup(data);
+
+  return 0;
 }
 
 /** Test utility function: checks that the <b>plaintext_len</b>-byte string at
@@ -285,6 +316,7 @@ do_parse_test(uint8_t *plaintext, size_t plaintext_len, int phase)
   uint8_t *cell = NULL;
   size_t cell_len;
   rend_intro_cell_t *parsed_req = NULL;
+  rend_service_t service;
   char *err_msg = NULL;
   char digest[DIGEST_LEN];
 
@@ -333,11 +365,32 @@ do_parse_test(uint8_t *plaintext, size_t plaintext_len, int phase)
   tt_assert(!err_msg);
   tt_assert(parsed_req->parsed);
 
+  if (phase == LATE_PARSE_ONLY)
+    goto done;
+
+  /* Do handoff */
+  MOCK(control_event_rend_handoff, control_event_rend_handoff_mocked);
+
+  memset(&service, 0, sizeof(service));
+  service.tag = "test";
+  from_mocked_handoff_tag = NULL;
+  from_mocked_handoff_data = NULL;
+  r = rend_service_handoff_introduce(parsed_req, &service);
+  tt_assert(!r);
+  tt_assert(from_mocked_handoff_tag);
+  tt_assert(from_mocked_handoff_data);
+
  done:
+  UNMOCK(control_event_rend_handoff);
+
   tor_free(cell);
   crypto_pk_free(k);
   rend_service_free_intro(parsed_req);
   tor_free(err_msg);
+  tor_free(from_mocked_handoff_tag);
+  tor_free(from_mocked_handoff_data);
+  from_mocked_handoff_tag = NULL;
+  from_mocked_handoff_data = NULL;
 }
 
 /** Given the plaintext of the encrypted part of an INTRODUCE1/2 and a key,
@@ -519,6 +572,49 @@ test_introduce_late_parse_v3(void *arg)
       v3_basic_auth_test_plaintext, sizeof(v3_basic_auth_test_plaintext));
 }
 
+/** Test v0 INTRODUCE2 parsing with handoff
+ */
+
+static void
+test_introduce_handoff_v0(void *arg)
+{
+  (void)arg;
+  do_handoff_test(v0_test_plaintext, sizeof(v0_test_plaintext));
+}
+
+/** Test v1 INTRODUCE2 parsing with handoff
+ */
+
+static void
+test_introduce_handoff_v1(void *arg)
+{
+  (void)arg;
+  do_handoff_test(v1_test_plaintext, sizeof(v1_test_plaintext));
+}
+
+/** Test v2 INTRODUCE2 parsing with handoff
+ */
+
+static void
+test_introduce_handoff_v2(void *arg)
+{
+  (void)arg;
+  do_handoff_test(v2_test_plaintext, sizeof(v2_test_plaintext));
+}
+
+/** Test v3 INTRODUCE2 parsing with handoff
+ */
+
+static void
+test_introduce_handoff_v3(void *arg)
+{
+  (void)arg;
+  do_handoff_test(
+      v3_no_auth_test_plaintext, sizeof(v3_no_auth_test_plaintext));
+  do_handoff_test(
+      v3_basic_auth_test_plaintext, sizeof(v3_basic_auth_test_plaintext));
+}
+
 #define INTRODUCE_LEGACY(name) \
   { #name, test_introduce_ ## name , 0, NULL, NULL }
 
@@ -535,6 +631,10 @@ struct testcase_t introduce_tests[] = {
   INTRODUCE_LEGACY(late_parse_v1),
   INTRODUCE_LEGACY(late_parse_v2),
   INTRODUCE_LEGACY(late_parse_v3),
+  INTRODUCE_LEGACY(handoff_v0),
+  INTRODUCE_LEGACY(handoff_v1),
+  INTRODUCE_LEGACY(handoff_v2),
+  INTRODUCE_LEGACY(handoff_v3),
   END_OF_TESTCASES
 };
 

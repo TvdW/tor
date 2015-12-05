@@ -4652,9 +4652,9 @@ write_stream_target_to_buf(entry_connection_t *conn, char *buf, size_t len)
   return 0;
 }
 
-/** TODO: docs */
-int
-control_event_rend_handoff(const char *tag, const char *rendezvousdata)
+/** We got an INTRODUCE2 cell and decided to hand it off to a controller. */
+MOCK_IMPL(int, control_event_rend_handoff, (const char *tag,
+                                            const char *rendezvousdata))
 {
   send_control_event(EVENT_REND_HANDOFF,
                      "650 INTRODUCE_HANDOFF %s %s\r\n",
